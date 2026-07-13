@@ -1,0 +1,54 @@
+[session]
+timezone             = "America/New_York"   # data is already ET; used for labelling
+rth_start            = "09:30"
+rth_end              = "16:00"              # last RTH minute bar is 15:59
+rth_close_bar        = "15:59"              # close = close of this bar (configurable)
+# ETH day = first bar -> last bar of the ET calendar date (no fixed clock window needed)
+ignore_weekends      = true                 # skip Saturday and Sunday entirely
+half_day_flag_before = "14:00"              # sessions whose last RTH bar precedes this = half day
+
+[gap]
+# gap = rth_open(today) - rth_close(previous SESSION), skipping weekends/holidays
+basis = "prev_session_rth_close"
+
+[windows]
+# Inclusive of the end bar. Clock ranges (not bar counts), so half-days
+# naturally yield shorter windows for any window ending after the early close.
+# Column prefix is "win_<name>_" to avoid colliding with the base rth_* / eth_*
+# columns. Do NOT define a window named "rth" — the full-session bundle already
+# exists as the base RTH columns.
+first_30m  = ["09:30", "09:59"]
+first_60m  = ["09:30", "10:29"]
+first_90m  = ["09:30", "10:59"]
+hour_10_11 = ["10:00", "10:59"]
+last_90m   = ["14:30", "15:59"]
+
+[gyrations]
+# Bars are always 1-minute. Ch*** identifies swings "as on a 1 minute chart"
+# and calls the 5-minute bar "very blunt". There is no bar-resolution parameter.
+mode       = "close_to_close"       # default; "extreme_to_extreme" available, see spec §2.2
+scopes     = ["rth", "eth", "continuous"]
+
+# Thresholds in points. Deliberately dense at the low end — fine thresholds are
+# what resolve the interior of coarse legs.
+thresholds = [10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200]
+
+# Which (scope, mode) combinations to precompute at ETL time. Everything else is
+# computed on demand and cached.
+precompute = [
+  { scope = "rth", mode = "close_to_close" },
+  { scope = "eth", mode = "close_to_close" },
+]
+
+# Only consulted when mode = "extreme_to_extreme". See spec §2.2.
+intrabar_tiebreak = "bar_direction"   # "bar_direction" | "adverse_first" | "favourable_first"
+
+[net_points]
+# Fu***'s 2003 spread-bet definition — his numbers, not laws. See spec §3.3.
+min_move      = 5    # legs <= this many points are excluded from net_points
+cost_per_move = 5    # points deducted per included leg for dealing cost
+
+[data]
+instruments  = ["US30"]                     # add more later; schema is instrument-aware
+raw_dir      = "D:/Trading/Research-Project-2026-07/2026 - Instruments Data (2008-2026)/DOW-Data"
+db_path      = "data/db/lookup.sqlite"

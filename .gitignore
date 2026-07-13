@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# Built database — regenerated from the raw CSVs via `python run_etl.py`
+# (~1.5GB, far past what should ever go into git)
+data/db/
+
+# Local Claude Code settings (machine-specific tool permissions, not shared config)
+.claude/settings.local.json
+
+# OS cruft
+.DS_Store
+Thumbs.db
