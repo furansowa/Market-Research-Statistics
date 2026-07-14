@@ -272,6 +272,9 @@ def render_filters(conn: sqlite3.Connection, instrument: str) -> tuple[dict, boo
                 if _render_filter_group(conn, instrument, specs, filters, n_cols):
                     lookahead_active = True
 
+        if timing == "pre_open":
+            st.markdown("<div style='margin-bottom: 2rem'></div>", unsafe_allow_html=True)
+
     return filters, lookahead_active
 
 
@@ -560,6 +563,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    filters, lookahead_active = render_filters(conn, instrument)
+
     st.markdown(
         '<h3 style="font-size:1.1rem; font-weight:700; margin:0.5rem 0 0.4rem 0;">Gyration overlay</h3>',
         unsafe_allow_html=True,
@@ -617,9 +622,6 @@ def main() -> None:
         "tiebreak": gyr_config["intrabar_tiebreak"],
         "sizes": sizes,
     }
-
-    st.markdown("---")
-    filters, lookahead_active = render_filters(conn, instrument)
 
     st.markdown("<div style='margin-top: 2rem'></div>", unsafe_allow_html=True)
     st.markdown("---")
