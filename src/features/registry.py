@@ -144,20 +144,24 @@ REGISTRY: list[FeatureSpec] = [
     ),
 
     # ---- RTH base ----
+    # filter_kind=None on the four price-level fields below: filtering on an
+    # absolute price is close to meaningless across 17 years of history (DOW
+    # ~7000 in 2009 vs ~52000 in 2026) — kept as table columns only, removed
+    # from the filter UI (2026-07-14).
     FeatureSpec(
-        "rth_open", "numeric", "RTH", "range", "RTH Open",
+        "rth_open", "numeric", "RTH", None, "RTH Open",
         timing="pre_open", show_in_table=True, decimals=1, table_label="Open",
     ),
     FeatureSpec(
-        "rth_high", "numeric", "RTH", "range", "RTH High",
+        "rth_high", "numeric", "RTH", None, "RTH High",
         timing="outcome", show_in_table=True, decimals=1, table_label="High",
     ),
     FeatureSpec(
-        "rth_low", "numeric", "RTH", "range", "RTH Low",
+        "rth_low", "numeric", "RTH", None, "RTH Low",
         timing="outcome", show_in_table=True, decimals=1, table_label="Low",
     ),
     FeatureSpec(
-        "rth_close", "numeric", "RTH", "range", "RTH Close",
+        "rth_close", "numeric", "RTH", None, "RTH Close",
         timing="outcome", show_in_table=True, decimals=1, table_label="Close",
     ),
     FeatureSpec(
@@ -167,19 +171,19 @@ REGISTRY: list[FeatureSpec] = [
     ),
     FeatureSpec(
         "rth_high_time", "time", "RTH", None, "RTH High Time",
-        timing="outcome", show_in_table=True, formatter=_hhmm, table_label="High Time",
+        timing="outcome", show_in_table=True, formatter=_hhmm, table_label="Htime",
     ),
     FeatureSpec(
         "rth_low_time", "time", "RTH", None, "RTH Low Time",
-        timing="outcome", show_in_table=True, formatter=_hhmm, table_label="Low Time",
+        timing="outcome", show_in_table=True, formatter=_hhmm, table_label="Ltime",
     ),
     FeatureSpec(
         "rth_high_minute", "numeric", "RTH", "range", "RTH High Bar",
-        timing="outcome", show_in_table=True, table_label="High Bar",
+        timing="outcome", show_in_table=True, table_label="Hbar",
     ),
     FeatureSpec(
         "rth_low_minute", "numeric", "RTH", "range", "RTH Low Bar",
-        timing="outcome", show_in_table=True, table_label="Low Bar",
+        timing="outcome", show_in_table=True, table_label="Lbar",
     ),
     FeatureSpec(
         "rth_high_bucket", "categorical", "RTH", "select", "RTH High (30-min bucket)",
@@ -195,17 +199,23 @@ REGISTRY: list[FeatureSpec] = [
         timing="outcome", show_in_table=True, decimals=1, table_label="Range",
     ),
     FeatureSpec(
-        "rth_range_ma20", "numeric", "RTH", "range", "Range MA20 (prior 20 sessions)",
+        "rth_range_ma20", "numeric", "RTH", None, "Range MA20 (prior 20 sessions)",
         # Trailing 20-session average, strictly *before* today (shift(1) then
         # a 20-window mean) — deliberately excludes today's own range so this
         # is knowable pre-open, unlike rth_range/range_vs_ma20_pts below.
-        compute=lambda df: pl.col("rth_range").shift(1).rolling_mean(window_size=20, min_samples=20),
-        timing="pre_open", show_in_table=True, decimals=0, table_label="Range MA20",
+        # min_samples=1 (not 20): a session with zero bars in scope (holiday,
+        # feed gap) leaves a null in the trailing 20, and rolling_mean already
+        # ignores nulls when averaging — the *count* requirement is what
+        # matters. Requiring exactly 20 non-null would poison the average for
+        # ~20 sessions after every gap; averaging over whatever's actually
+        # present is what was asked for instead.
+        compute=lambda df: pl.col("rth_range").shift(1).rolling_mean(window_size=20, min_samples=1),
+        timing="pre_open", show_in_table=True, decimals=0, table_label="RgeMA20",
     ),
     FeatureSpec(
         "range_vs_ma20_pts", "numeric", "RTH", "range", "Range vs MA20 (pts)",
         compute=lambda df: pl.col("rth_range") - pl.col("rth_range_ma20"),
-        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Range vs MA20",
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="RgeVsMA20",
     ),
     FeatureSpec(
         "range_vs_ma20_dir", "categorical", "RTH", "select", "Range vs MA20 direction",
@@ -215,7 +225,7 @@ REGISTRY: list[FeatureSpec] = [
     FeatureSpec(
         "abs_range_diff_pts", "numeric", "RTH", "range", "Abs. Range Diff (vs prev range, pts)",
         compute=lambda df: pl.col("rth_range") - pl.col("rth_range").shift(1),
-        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Abs. Range Diff",
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="AbsRgeDiff",
     ),
     FeatureSpec(
         "abs_range_diff_dir", "categorical", "RTH", "select", "Abs. Range Diff direction",
@@ -272,31 +282,34 @@ REGISTRY: list[FeatureSpec] = [
     ),
 
     # ---- ETH / full-day base ----
+    # filter_kind=None: the dedicated "ETH" filter group was removed from the
+    # dashboard (2026-07-14) with no replacement destination, so these are no
+    # longer filterable — still computed/available as table columns.
     FeatureSpec(
-        "eth_open", "numeric", "ETH", "range", "Full-day Open",
+        "eth_open", "numeric", "ETH", None, "Full-day Open",
         timing="pre_open",
     ),
     FeatureSpec(
-        "eth_high", "numeric", "ETH", "range", "Full-day High",
+        "eth_high", "numeric", "ETH", None, "Full-day High",
         timing="outcome",
     ),
     FeatureSpec(
-        "eth_low", "numeric", "ETH", "range", "Full-day Low",
+        "eth_low", "numeric", "ETH", None, "Full-day Low",
         timing="outcome",
     ),
     FeatureSpec(
-        "eth_close", "numeric", "ETH", "range", "Full-day Close",
+        "eth_close", "numeric", "ETH", None, "Full-day Close",
         timing="outcome",
     ),
     FeatureSpec(
-        "eth_range", "numeric", "ETH", "range", "Full-day Range",
+        "eth_range", "numeric", "ETH", None, "Full-day Range",
         compute=lambda df: pl.col("eth_high") - pl.col("eth_low"),
         timing="outcome",
     ),
 
     # ---- gap / close-difference derived ----
     FeatureSpec(
-        "gap_pts", "numeric", "RTH", "range", "Gap (pts)",
+        "gap_pts", "numeric", "RTH", None, "Gap (pts)",
         compute=lambda df: pl.col("rth_open") - pl.col("rth_close").shift(1),
         timing="pre_open", show_in_table=True, decimals=1, color_kind="pts", table_label="Gap",
     ),
@@ -308,7 +321,7 @@ REGISTRY: list[FeatureSpec] = [
     FeatureSpec(
         "rel_close_pts", "numeric", "RTH", "range", "Rel. close (close-open, pts)",
         compute=lambda df: pl.col("rth_close") - pl.col("rth_open"),
-        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Rel Close",
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="RelClose",
     ),
     FeatureSpec(
         "rel_close_dir", "categorical", "RTH", "select", "Rel. close direction",
@@ -318,7 +331,7 @@ REGISTRY: list[FeatureSpec] = [
     FeatureSpec(
         "abs_close_pts", "numeric", "RTH", "range", "Abs. close (vs prev close, pts)",
         compute=lambda df: pl.col("rth_close") - pl.col("rth_close").shift(1),
-        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Abs Close",
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="AbsClose",
     ),
     FeatureSpec(
         "abs_close_dir", "categorical", "RTH", "select", "Abs. close direction",
@@ -401,156 +414,228 @@ REGISTRY: list[FeatureSpec] = [
 # Generated in a loop over configured windows, not hand-listed, so the registry
 # can't drift from config.toml's [windows] section (spec's explicit instruction).
 # Mirrors the RTH block above 1:1, scoped to each window's own bars instead of
-# the whole session — one dashboard tab per window (see dashboard.py's
-# WINDOW_TABS). Session-level facts shared by every tab (date/weekday/
-# is_half_day) are declared once above with `shared_across_tabs=True` instead
-# of being duplicated here.
-WINDOW_NAMES = ["first_30m", "first_60m", "first_90m", "hour_10_11"]
+# the whole session. Session-level facts shared regardless of window
+# (date/weekday/is_half_day) are declared once above with
+# `shared_across_tabs=True` instead of being duplicated here.
+#
+# Rework (2026-07-14): dropped the per-window dashboard tabs — window data now
+# lives as extra columns/filters in the single Day Session table instead, so
+# only a deliberately small subset of each window's fields is surfaced
+# (`show_in_table`/filter visibility below), not full OHLC parity. A window
+# with no entry in WINDOW_DISPLAY (first_60m) stays fully dormant — computed,
+# available, just not shown — exactly like last_90m already is.
+WINDOW_NAMES = ["first_30m", "first_60m", "hour_10_11", "first_90m", "last_90m"]
+
+# concept name -> abbreviated label suffix, concatenated directly onto the
+# window's clock-range prefix (e.g. prefix "930-10" + "Rge" -> "930-10Rge"),
+# except bs_sb which gets a space before it ("930-10 BS/SB") per user request.
+_WINDOW_LABEL_SUFFIX = {
+    "bs_sb": " BS/SB",
+    "range": "Rge",
+    "range_ma20": "RgeMA20",
+    "range_vs_ma20_pts": "RgeVsMA20",
+    "rel_close_pts": "RelClose",
+    "abs_close_pts": "AbsClose",
+}
+
+WINDOW_DISPLAY = {
+    "first_30m": {
+        "prefix": "930-10",
+        "show": {"bs_sb", "range", "range_ma20", "range_vs_ma20_pts", "rel_close_pts", "abs_close_pts"},
+    },
+    "hour_10_11": {
+        "prefix": "10-11",
+        "show": {"bs_sb", "range", "range_ma20", "range_vs_ma20_pts", "rel_close_pts"},
+    },
+    "first_90m": {
+        "prefix": "930-11",
+        "show": {"bs_sb", "range", "range_ma20", "range_vs_ma20_pts", "rel_close_pts"},
+    },
+    "last_90m": {
+        "prefix": "1430-16",
+        "show": {"bs_sb", "range", "range_ma20", "range_vs_ma20_pts", "rel_close_pts"},
+    },
+}
 
 
 def _window_bundle_specs(name: str) -> list[FeatureSpec]:
     p = f"win_{name}_"
+    active = name in WINDOW_DISPLAY
+    display = WINDOW_DISPLAY.get(name, {})
+    shown = display.get("show", set())
+    prefix = display.get("prefix")
 
     def col(c: str) -> str:
         return p + c
 
+    def show(concept: str) -> bool:
+        return concept in shown
+
+    def label(concept: str) -> str | None:
+        return f"{prefix}{_WINDOW_LABEL_SUFFIX[concept]}" if show(concept) else None
+
+    def fk(concept: str, kind: str) -> str | None:
+        """filter_kind, gated the same way as show_in_table — only the fields
+        actually surfaced as columns get a corresponding filter, so the
+        "930-1000 filters" etc. groups don't fill up with filters for columns
+        that aren't even shown (Open/High/Low/Close/Gap/etc. for windows)."""
+        return kind if show(concept) else None
+
     return [
         FeatureSpec(
-            col("open"), "numeric", "RTH", "range", f"{name} Open",
-            timing="outcome", show_in_table=True, decimals=1, table_label="Open", window=name,
+            col("open"), "numeric", "RTH", None, f"{name} Open",
+            timing="outcome", show_in_table=False, decimals=1, window=name,
         ),
         FeatureSpec(
-            col("high"), "numeric", "RTH", "range", f"{name} High",
-            timing="outcome", show_in_table=True, decimals=1, table_label="High", window=name,
+            col("high"), "numeric", "RTH", None, f"{name} High",
+            timing="outcome", show_in_table=False, decimals=1, window=name,
         ),
         FeatureSpec(
-            col("low"), "numeric", "RTH", "range", f"{name} Low",
-            timing="outcome", show_in_table=True, decimals=1, table_label="Low", window=name,
+            col("low"), "numeric", "RTH", None, f"{name} Low",
+            timing="outcome", show_in_table=False, decimals=1, window=name,
         ),
         FeatureSpec(
-            col("close"), "numeric", "RTH", "range", f"{name} Close",
-            timing="outcome", show_in_table=True, decimals=1, table_label="Close", window=name,
+            col("close"), "numeric", "RTH", None, f"{name} Close",
+            timing="outcome", show_in_table=False, decimals=1, window=name,
         ),
         FeatureSpec(
-            col("bs_sb"), "categorical", "RTH", "select", f"{name} BS/SB",
+            col("bs_sb"), "categorical", "RTH", fk("bs_sb", "select"), f"{name} BS/SB",
             compute=lambda df, h=col("high_time"), l=col("low_time"): _bs_sb_expr(h, l, nullable=True),
-            timing="outcome", show_in_table=True, color_kind="enum", color_map=_BS_SB_COLOR_MAP, window=name,
-            table_label="BS/SB",
+            timing="outcome", show_in_table=show("bs_sb"), color_kind="enum", color_map=_BS_SB_COLOR_MAP,
+            window=name, table_label=label("bs_sb"),
         ),
         FeatureSpec(
             col("high_time"), "time", "RTH", None, f"{name} High Time",
-            timing="outcome", show_in_table=True, formatter=_hhmm, table_label="High Time", window=name,
+            timing="outcome", show_in_table=False, formatter=_hhmm, window=name,
         ),
         FeatureSpec(
             col("low_time"), "time", "RTH", None, f"{name} Low Time",
-            timing="outcome", show_in_table=True, formatter=_hhmm, table_label="Low Time", window=name,
+            timing="outcome", show_in_table=False, formatter=_hhmm, window=name,
         ),
         FeatureSpec(
-            col("high_minute"), "numeric", "RTH", "range", f"{name} High Bar",
-            timing="outcome", show_in_table=True, table_label="High Bar", window=name,
-        ),
-        FeatureSpec(
-            col("low_minute"), "numeric", "RTH", "range", f"{name} Low Bar",
-            timing="outcome", show_in_table=True, table_label="Low Bar", window=name,
-        ),
-        FeatureSpec(
-            col("high_bucket"), "categorical", "RTH", "select", f"{name} High (30-min bucket)",
+            col("high_minute"), "numeric", "RTH", None, f"{name} High Bar",
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("low_bucket"), "categorical", "RTH", "select", f"{name} Low (30-min bucket)",
+            col("low_minute"), "numeric", "RTH", None, f"{name} Low Bar",
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("range"), "numeric", "RTH", "range", f"{name} Range",
+            col("high_bucket"), "categorical", "RTH", None, f"{name} High (30-min bucket)",
+            timing="outcome", show_in_table=False, window=name,
+        ),
+        FeatureSpec(
+            col("low_bucket"), "categorical", "RTH", None, f"{name} Low (30-min bucket)",
+            timing="outcome", show_in_table=False, window=name,
+        ),
+        FeatureSpec(
+            col("range"), "numeric", "RTH", fk("range", "range"), f"{name} Range",
             compute=lambda df, h=col("high"), l=col("low"): pl.col(h) - pl.col(l),
-            timing="outcome", show_in_table=True, decimals=1, table_label="Range", window=name,
+            timing="outcome", show_in_table=show("range"), decimals=1, window=name, table_label=label("range"),
         ),
         FeatureSpec(
-            col("range_ma20"), "numeric", "RTH", "range", f"{name} Range MA20 (prior 20 sessions)",
-            compute=lambda df, r=col("range"): pl.col(r).shift(1).rolling_mean(window_size=20, min_samples=20),
-            timing="outcome", show_in_table=True, decimals=0, table_label="Range MA20", window=name,
+            col("range_ma20"), "numeric", "RTH", fk("range_ma20", "range"),
+            f"{name} Range MA20 (prior 20 sessions)",
+            # min_samples=1: a session with zero bars in this window (holiday,
+            # feed gap) leaves a null range for that day — average over
+            # whichever of the trailing 20 sessions actually have data instead
+            # of requiring all 20 (see rth_range_ma20 above for the full note).
+            compute=lambda df, r=col("range"): pl.col(r).shift(1).rolling_mean(window_size=20, min_samples=1),
+            timing="outcome", show_in_table=show("range_ma20"), decimals=0, window=name,
+            table_label=label("range_ma20"),
         ),
         FeatureSpec(
-            col("range_vs_ma20_pts"), "numeric", "RTH", "range", f"{name} Range vs MA20 (pts)",
+            col("range_vs_ma20_pts"), "numeric", "RTH", fk("range_vs_ma20_pts", "range"),
+            f"{name} Range vs MA20 (pts)",
             compute=lambda df, r=col("range"), m=col("range_ma20"): pl.col(r) - pl.col(m),
-            timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Range vs MA20",
-            window=name,
+            timing="outcome", show_in_table=show("range_vs_ma20_pts"), decimals=1, color_kind="pts",
+            window=name, table_label=label("range_vs_ma20_pts"),
         ),
         FeatureSpec(
-            col("range_vs_ma20_dir"), "categorical", "RTH", "select", f"{name} Range vs MA20 direction",
+            col("range_vs_ma20_dir"), "categorical", "RTH", fk("range_vs_ma20_pts", "select"),
+            f"{name} Range vs MA20 direction",
             compute=lambda df, c=col("range_vs_ma20_pts"): _dir3(c),
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("abs_range_diff_pts"), "numeric", "RTH", "range",
+            col("abs_range_diff_pts"), "numeric", "RTH", None,
             f"{name} Abs. Range Diff (vs prev range, pts)",
             compute=lambda df, r=col("range"): pl.col(r) - pl.col(r).shift(1),
-            timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Abs. Range Diff",
-            window=name,
+            timing="outcome", show_in_table=False, decimals=1, color_kind="pts", window=name,
         ),
         FeatureSpec(
-            col("abs_range_diff_dir"), "categorical", "RTH", "select", f"{name} Abs. Range Diff direction",
+            col("abs_range_diff_dir"), "categorical", "RTH", None, f"{name} Abs. Range Diff direction",
             compute=lambda df, c=col("abs_range_diff_pts"): _dir3(c),
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("gap_pts"), "numeric", "RTH", "range", f"{name} Gap (pts)",
+            col("gap_pts"), "numeric", "RTH", None, f"{name} Gap (pts)",
             compute=lambda df, o=col("open"), c=col("close"): pl.col(o) - pl.col(c).shift(1),
-            timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Gap", window=name,
+            timing="outcome", show_in_table=False, decimals=1, color_kind="pts", window=name,
         ),
         FeatureSpec(
-            col("gap_dir"), "categorical", "RTH", "select", f"{name} Gap direction",
+            col("gap_dir"), "categorical", "RTH", None, f"{name} Gap direction",
             compute=lambda df, c=col("gap_pts"): _dir3(c),
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("rel_close_pts"), "numeric", "RTH", "range", f"{name} Rel. close (close-open, pts)",
+            col("rel_close_pts"), "numeric", "RTH", fk("rel_close_pts", "range"),
+            f"{name} Rel. close (close-open, pts)",
             compute=lambda df, c=col("close"), o=col("open"): pl.col(c) - pl.col(o),
-            timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Rel Close",
-            window=name,
+            timing="outcome", show_in_table=show("rel_close_pts"), decimals=1, color_kind="pts",
+            window=name, table_label=label("rel_close_pts"),
         ),
         FeatureSpec(
-            col("rel_close_dir"), "categorical", "RTH", "select", f"{name} Rel. close direction",
+            col("rel_close_dir"), "categorical", "RTH", fk("rel_close_pts", "select"),
+            f"{name} Rel. close direction",
             compute=lambda df, c=col("rel_close_pts"): _dir3(c),
             timing="outcome", show_in_table=False, window=name,
         ),
         FeatureSpec(
-            col("abs_close_pts"), "numeric", "RTH", "range", f"{name} Abs. close (vs prev close, pts)",
+            col("abs_close_pts"), "numeric", "RTH", fk("abs_close_pts", "range"),
+            f"{name} Abs. close (vs prev close, pts)",
             compute=lambda df, c=col("close"): pl.col(c) - pl.col(c).shift(1),
-            timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="Abs Close",
-            window=name,
+            timing="outcome", show_in_table=show("abs_close_pts"), decimals=1, color_kind="pts",
+            window=name, table_label=label("abs_close_pts"),
         ),
         FeatureSpec(
-            col("abs_close_dir"), "categorical", "RTH", "select", f"{name} Abs. close direction",
+            col("abs_close_dir"), "categorical", "RTH", fk("abs_close_pts", "select"),
+            f"{name} Abs. close direction",
             compute=lambda df, c=col("abs_close_pts"): _dir3(c),
             timing="outcome", show_in_table=False, window=name,
         ),
         # ---- context: previous-session (same window) shifts ----
+        # Gated on the whole window being "active" (has a WINDOW_DISPLAY entry)
+        # rather than a specific concept — these are filter-only companions,
+        # not tied to one particular shown column — so a dormant window
+        # (first_60m) ends up with these fully non-filterable too, matching
+        # last_90m's precedent, instead of leaking through unconditionally.
         FeatureSpec(
-            f"prev_{p}bs_sb", "categorical", "context", "select", f"Prev. {name} BS/SB",
+            f"prev_{p}bs_sb", "categorical", "context", "select" if active else None, f"Prev. {name} BS/SB",
             compute=lambda df, c=col("bs_sb"): pl.col(c).shift(1),
             timing="pre_open", window=name,
         ),
         FeatureSpec(
-            f"prev_{p}range_vs_ma20_dir", "categorical", "context", "select",
+            f"prev_{p}range_vs_ma20_dir", "categorical", "context", "select" if active else None,
             f"Prev. {name} RangeMA20 difference",
             compute=lambda df, c=col("range_vs_ma20_dir"): pl.col(c).shift(1),
             timing="pre_open", window=name,
         ),
         FeatureSpec(
-            f"prev_{p}range_vs_ma20_pts", "numeric", "context", "range", f"Prev. {name} RangeMA20 diff (pts)",
+            f"prev_{p}range_vs_ma20_pts", "numeric", "context", "range" if active else None,
+            f"Prev. {name} RangeMA20 diff (pts)",
             compute=lambda df, c=col("range_vs_ma20_pts"): pl.col(c).shift(1),
             timing="pre_open", decimals=1, window=name,
         ),
         FeatureSpec(
-            f"prev_{p}abs_range_diff_dir", "categorical", "context", "select",
+            f"prev_{p}abs_range_diff_dir", "categorical", "context", "select" if active else None,
             f"Prev. {name} Abs. Range difference",
             compute=lambda df, c=col("abs_range_diff_dir"): pl.col(c).shift(1),
             timing="pre_open", window=name,
         ),
         FeatureSpec(
-            f"prev_{p}abs_range_diff_pts", "numeric", "context", "range", f"Prev. {name} Abs. Range diff (pts)",
+            f"prev_{p}abs_range_diff_pts", "numeric", "context", "range" if active else None,
+            f"Prev. {name} Abs. Range diff (pts)",
             compute=lambda df, c=col("abs_range_diff_pts"): pl.col(c).shift(1),
             timing="pre_open", decimals=1, window=name,
         ),
@@ -572,10 +657,18 @@ def derived_features() -> list[FeatureSpec]:
     return [f for f in REGISTRY if f.compute is not None]
 
 
-def filterable_features(window: Optional[str] = None) -> list[FeatureSpec]:
-    return [f for f in REGISTRY if f.filter_kind is not None and (f.shared_across_tabs or f.window == window)]
+def filterable_features() -> list[FeatureSpec]:
+    return [f for f in REGISTRY if f.filter_kind is not None]
 
 
-def table_features(window: Optional[str] = None) -> list[FeatureSpec]:
-    """Features shown in the results table for a given tab, in registry order."""
-    return [f for f in REGISTRY if f.show_in_table and (f.shared_across_tabs or f.window == window)]
+def table_features() -> list[FeatureSpec]:
+    """Features shown in the results table, in registry order.
+
+    Rework (2026-07-14): reverted to the single-view form — window bundles
+    are now just extra columns/filters in the one Day Session table rather
+    than separate per-window tabs, so `show_in_table`/`filter_kind` alone
+    decide inclusion; `window`/`shared_across_tabs` are kept as metadata
+    (used by dashboard.py to group filters into sub-areas) but no longer
+    gate these two functions.
+    """
+    return [f for f in REGISTRY if f.show_in_table]

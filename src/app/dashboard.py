@@ -41,30 +41,18 @@ TIMING_LABELS = {
 GYR_DEFAULT_COLORS = ["#7EC8E3", "#F2A65A", "#8BC98F"]  # blue / orange / green, one per size slot
 GYR_N_SIZES = 3
 
-# One dashboard tab per config-declared window (Phase 2 spec §3.3), plus the
-# whole-RTH "Day Session" tab (window=None). Order here is the tab order.
-WINDOW_TABS = [
-    (None, "Day Session"),
-    ("first_30m", "9:30 - 10:00 Session"),
-    ("first_60m", "9:30 - 10:30 Session"),
-    ("hour_10_11", "10:00 - 11:00 Session"),
-    ("first_90m", "9:30 - 11:00 Session"),
-]
-
-
-def _col(window: str | None, concept: str) -> str:
-    """Map a display concept ("open", "gap_pts", ...) to its actual
-    sessions-table column name for the given tab. None = whole-RTH columns
-    (rth_open, bs_sb, ...); a window key = that window's own win_<name>_*
-    columns."""
-    if window is None:
-        return {
-            "open": "rth_open", "high": "rth_high", "low": "rth_low", "close": "rth_close",
-            "high_time": "rth_high_time", "low_time": "rth_low_time",
-            "range": "rth_range", "bs_sb": "bs_sb",
-            "gap_pts": "gap_pts", "rel_close_pts": "rel_close_pts", "abs_close_pts": "abs_close_pts",
-        }[concept]
-    return f"win_{window}_{concept}"
+# Rework (2026-07-14): the per-window dashboard tabs were taken back down —
+# window bundles now surface as extra columns/filters in the single Day
+# Session table instead (see registry.py's WINDOW_DISPLAY). Display title for
+# each window's filter sub-area (grouped by FeatureSpec.window, see
+# render_filters below); a window with no entry here (first_60m) simply
+# never produces a group, since its specs have no filter_kind set.
+WINDOW_FILTER_TITLES = {
+    "first_30m": "930-1000 filters",
+    "hour_10_11": "1000-1100 filters",
+    "first_90m": "930-1100 filters",
+    "last_90m": "1430-1600 filters",
+}
 
 
 def _pts_color(v) -> str:
@@ -126,49 +114,26 @@ def cached_distinct_values(_conn: sqlite3.Connection, column: str, instrument: s
     return [r[0] for r in rows]
 
 
-def read_minutes(
-    conn: sqlite3.Connection, instrument: str, date: str, basis: str,
-    time_range: tuple[str, str] | None = None,
-) -> pd.DataFrame:
-    if time_range is not None:
-        # Window tabs: bars are always an RTH subset, further restricted to the
-        # window's own clock range. `ts` is TEXT 'YYYY-MM-DD HH:MM:SS'; substr
-        # at position 12 for 5 chars pulls "HH:MM", which compares correctly
-        # lexicographically against another zero-padded "HH:MM".
-        sql = (
-            "SELECT ts, open, high, low, close FROM minutes "
-            "WHERE instrument = ? AND date = ? AND session = 'RTH' "
-            "AND substr(ts, 12, 5) BETWEEN ? AND ? ORDER BY ts"
-        )
-        params = (instrument, date, time_range[0], time_range[1])
-    elif basis == "RTH":
+def read_minutes(conn: sqlite3.Connection, instrument: str, date: str, basis: str) -> pd.DataFrame:
+    if basis == "RTH":
         sql = (
             "SELECT ts, open, high, low, close FROM minutes "
             "WHERE instrument = ? AND date = ? AND session = 'RTH' ORDER BY ts"
         )
-        params = (instrument, date)
     else:
         sql = (
             "SELECT ts, open, high, low, close FROM minutes "
             "WHERE instrument = ? AND date = ? ORDER BY ts"
         )
-        params = (instrument, date)
-    cur = conn.execute(sql, params)
+    cur = conn.execute(sql, (instrument, date))
     rows = cur.fetchall()
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close"])
     df["ts"] = pd.to_datetime(df["ts"])
     return df
 
 
-def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec, key_suffix: str = "") -> tuple:
+def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec) -> tuple:
     """Render an offset selector + value widget for one filterable feature.
-
-    `key_suffix` disambiguates widget keys across tabs — most feature names are
-    already tab-unique (window-scoped columns are prefixed `win_<name>_`), but
-    `shared_across_tabs` specs (weekday, is_half_day) use the *same* `spec.name`
-    in every tab, so without this their widgets would collide. This also means
-    each tab gets its own independent weekday/half-day selection, consistent
-    with every other per-tab control.
 
     Returns (value, offset). value is None if the filter is left unconstrained
     (or has a degenerate/empty domain, in which case nothing is rendered at all).
@@ -188,18 +153,17 @@ def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec, key_suff
     else:
         values = None
 
-    key_base = f"{spec.name}{key_suffix}"
     col_val, col_off = st.columns([3, 1])
 
     with col_val:
         if spec.filter_kind == "range":
-            val = st.slider(spec.label, lo, hi, (lo, hi), key=f"filt_{key_base}")
+            val = st.slider(spec.label, lo, hi, (lo, hi), key=f"filt_{spec.name}")
             value = val if val != (lo, hi) else None
         elif spec.filter_kind == "select":
-            sel = st.multiselect(spec.label, values, default=[], key=f"filt_{key_base}")
+            sel = st.multiselect(spec.label, values, default=[], key=f"filt_{spec.name}")
             value = sel if sel else None
         elif spec.filter_kind == "bool":
-            choice = st.selectbox(spec.label, ["Any", "Yes", "No"], key=f"filt_{key_base}")
+            choice = st.selectbox(spec.label, ["Any", "Yes", "No"], key=f"filt_{spec.name}")
             value = (choice == "Yes") if choice != "Any" else None
         else:
             value = None
@@ -209,30 +173,83 @@ def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec, key_suff
         # height as the value widget's visible label above, so the two inputs
         # line up on the same row instead of the offset control floating higher.
         offset_label = st.selectbox(
-            "offset", OFFSET_LABELS, index=2, key=f"off_{key_base}", label_visibility="hidden"
+            "offset", OFFSET_LABELS, index=2, key=f"off_{spec.name}", label_visibility="hidden"
         )
     offset = OFFSET_VALUES[offset_label]
+
+    # Breathing room before the next filter's label — the app-wide
+    # stVerticalBlock gap is set tight (0.4rem) for compactness elsewhere, so
+    # filter rows need their own explicit spacer rather than a global bump.
+    st.markdown("<div style='margin-bottom: 1.2rem'></div>", unsafe_allow_html=True)
 
     return value, offset
 
 
-def render_filters(conn: sqlite3.Connection, instrument: str, window: str | None = None) -> tuple[dict, bool]:
-    """Registry-driven filters, grouped by timing (pre_open/outcome) then basis.
+def _filter_group_key(spec) -> str:
+    """Which sidebar expander a filterable spec belongs in. Window-scoped
+    specs (own + their Prev. cross-session companions) group by their window,
+    regardless of basis — a window's "own" fields are basis="RTH" and its
+    Prev. fields are basis="context", but they render together in one
+    "9xx-xx filters" expander (Streamlit doesn't allow nested expanders, so
+    this is a sibling group, not literally nested inside "context").
 
-    Renders into whatever container is currently active (sidebar or a tab body)
-    rather than hardcoding `st.sidebar` — window tabs render their own filters
-    inline in the tab, not the (shared, global-controls-only) sidebar.
+    The standalone "RTH"/"ETH" expanders were removed (2026-07-14); all
+    whole-session basis="RTH" filters (both pre_open and outcome timing) now
+    fold into "rth_filters" alongside the context ones. ETH has no filters
+    left (see registry.py) so it never reaches this function."""
+    if spec.window is not None:
+        return spec.window
+    if spec.basis == "context" and spec.name in ("weekday", "is_half_day"):
+        return "context"
+    if spec.basis in ("context", "RTH"):
+        return "rth_filters"
+    return spec.basis  # "ETH" — should not occur, no ETH filters remain
+
+
+_FILTER_GROUP_TITLES = {
+    "context": "Session Context",
+    "rth_filters": "RTH filters",
+    **WINDOW_FILTER_TITLES,
+}
+_FILTER_GROUP_ORDER = ["context", "rth_filters", "first_30m", "hour_10_11", "first_90m", "last_90m"]
+
+# How many filters to lay out per row within each group's expander. "context"
+# is always exactly weekday + is_half_day, so 2 puts them on one line; every
+# other group packs 3 per row to cut down on scrolling.
+_FILTER_GROUP_COLS = {"context": 2}
+_DEFAULT_FILTER_COLS = 3
+
+
+def _render_filter_group(conn: sqlite3.Connection, instrument: str, specs: list, filters: dict, n_cols: int) -> bool:
+    """Render `specs` in a grid of `n_cols` filters per row. Returns True if
+    any outcome-timing filter ended up active at a lookahead offset (>= 0)."""
+    lookahead_active = False
+    for i in range(0, len(specs), n_cols):
+        row_specs = specs[i:i + n_cols]
+        cols = st.columns(n_cols)
+        for col, spec in zip(cols, row_specs):
+            with col:
+                value, offset = _render_one_filter(conn, instrument, spec)
+            if value is not None:
+                filters[(spec.name, offset)] = value
+                if spec.timing == "outcome" and offset >= 0:
+                    lookahead_active = True
+    return lookahead_active
+
+
+def render_filters(conn: sqlite3.Connection, instrument: str) -> tuple[dict, bool]:
+    """Registry-driven filters, grouped by timing (pre_open/outcome) then by
+    `_filter_group_key` (context / RTH filters / each window).
 
     Returns (filters, lookahead_active) where filters is keyed by
     (feature_name, offset) and lookahead_active is True if any outcome-timing
     filter is active at offset >= 0 (Phase 2 spec §6.2).
     """
-    key_suffix = f"_{window or 'day'}"
     by_timing: dict[str, dict[str, list]] = {"pre_open": {}, "outcome": {}}
-    for spec in filterable_features(window=window):
+    for spec in filterable_features():
         if spec.name == "instrument":
             continue
-        by_timing[spec.timing].setdefault(spec.basis, []).append(spec)
+        by_timing[spec.timing].setdefault(_filter_group_key(spec), []).append(spec)
 
     filters: dict = {}
     lookahead_active = False
@@ -246,29 +263,14 @@ def render_filters(conn: sqlite3.Connection, instrument: str, window: str | None
             header += "  ⚠️"
         st.markdown(f"**{header}**")
 
-        if window is None:
-            # Day Session tab: keep the RTH/ETH/context 3-way basis split.
-            for basis_name in ["context", "RTH", "ETH"]:
-                specs = groups.get(basis_name, [])
-                if not specs:
-                    continue
-                with st.expander(basis_name, expanded=False):
-                    for spec in specs:
-                        value, offset = _render_one_filter(conn, instrument, spec, key_suffix)
-                        if value is not None:
-                            filters[(spec.name, offset)] = value
-                            if spec.timing == "outcome" and offset >= 0:
-                                lookahead_active = True
-        else:
-            # Window tabs: no RTH/ETH concept — one flat group per timing bucket.
-            all_specs = [s for specs in groups.values() for s in specs]
-            with st.expander("Filters", expanded=False):
-                for spec in all_specs:
-                    value, offset = _render_one_filter(conn, instrument, spec, key_suffix)
-                    if value is not None:
-                        filters[(spec.name, offset)] = value
-                        if spec.timing == "outcome" and offset >= 0:
-                            lookahead_active = True
+        for group_key in _FILTER_GROUP_ORDER:
+            specs = groups.get(group_key, [])
+            if not specs:
+                continue
+            with st.expander(_FILTER_GROUP_TITLES[group_key], expanded=False):
+                n_cols = _FILTER_GROUP_COLS.get(group_key, _DEFAULT_FILTER_COLS)
+                if _render_filter_group(conn, instrument, specs, filters, n_cols):
+                    lookahead_active = True
 
     return filters, lookahead_active
 
@@ -378,7 +380,6 @@ def _add_rth_open_line(fig: go.Figure, row: pd.Series) -> None:
 
 def render_session_chart(
     conn: sqlite3.Connection, instrument: str, row: pd.Series, basis: str, gyr_settings: dict,
-    window: str | None = None,
 ) -> None:
     date = row["date"]
     st.markdown(f"**{instrument} — {date} ({row['weekday']})**")
@@ -387,10 +388,7 @@ def render_session_chart(
         return f"{v:.1f}" if pd.notna(v) else "—"
 
     bs_sb_spec = REGISTRY_BY_NAME["bs_sb"]
-    gap = row.get(_col(window, "gap_pts"))
-    rel = row.get(_col(window, "rel_close_pts"))
-    rng = row.get(_col(window, "range"))
-    bs_sb = row.get(_col(window, "bs_sb"))
+    gap, rel, rng, bs_sb = row["gap_pts"], row["rel_close_pts"], row["rth_range"], row["bs_sb"]
     st.markdown(
         f'<div style="display:flex; gap:20px; font-size:0.78rem; line-height:1.6; '
         f'margin:0 0 24px 0; padding-bottom:2px; align-items:baseline;">'
@@ -401,18 +399,14 @@ def render_session_chart(
         f'<div><span style="color:#888;">Range </span>'
         f'<b style="font-size:0.85rem;">{_fmt(rng)}</b></div>'
         f'<div><span style="color:#888;">BS/SB </span>'
-        f'<b style="font-size:0.85rem; {_enum_color(bs_sb, bs_sb_spec.color_map)}">{bs_sb or "—"}</b></div>'
+        f'<b style="font-size:0.85rem; {_enum_color(bs_sb, bs_sb_spec.color_map)}">{bs_sb}</b></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    if window is None:
-        bars = read_minutes(conn, instrument, date, basis)
-    else:
-        start, end = get_config()["windows"][window]
-        bars = read_minutes(conn, instrument, date, "RTH", time_range=(start, end))
+    bars = read_minutes(conn, instrument, date, basis)
     if bars.empty:
-        st.warning("No minute bars found for this session/window.")
+        st.warning("No minute bars found for this session/basis.")
         return
 
     fig = go.Figure(
@@ -426,22 +420,18 @@ def render_session_chart(
 
     _add_rth_open_line(fig, row)
 
-    show_hod_lod = (basis == "RTH") if window is None else True
-    if show_hod_lod:
-        high_time, low_time = row.get(_col(window, "high_time")), row.get(_col(window, "low_time"))
-        if high_time is not None and pd.notna(high_time):
-            fig.add_scatter(
-                x=[pd.to_datetime(high_time)], y=[row.get(_col(window, "high"))],
-                mode="markers+text", text=["HOD"], textposition="top center",
-                marker=dict(color="green", size=11, symbol="triangle-down"), name="HOD",
-            )
-        if low_time is not None and pd.notna(low_time):
-            fig.add_scatter(
-                x=[pd.to_datetime(low_time)], y=[row.get(_col(window, "low"))],
-                mode="markers+text", text=["LOD"], textposition="bottom center",
-                marker=dict(color="red", size=11, symbol="triangle-up"), name="LOD",
-            )
-        if window is None and gyr_settings["show_close_hilo"]:
+    if basis == "RTH":
+        fig.add_scatter(
+            x=[pd.to_datetime(row["rth_high_time"])], y=[row["rth_high"]],
+            mode="markers+text", text=["HOD"], textposition="top center",
+            marker=dict(color="green", size=11, symbol="triangle-down"), name="HOD",
+        )
+        fig.add_scatter(
+            x=[pd.to_datetime(row["rth_low_time"])], y=[row["rth_low"]],
+            mode="markers+text", text=["LOD"], textposition="bottom center",
+            marker=dict(color="red", size=11, symbol="triangle-up"), name="LOD",
+        )
+        if gyr_settings["show_close_hilo"]:
             # Legs run on closes (spec §2.3/§3.4); these sit at candle bodies,
             # not wicks, unlike the extreme-based HOD/LOD above — expected,
             # not a bug. Shown together so the two can be compared directly.
@@ -473,18 +463,10 @@ def render_session_chart(
 OHLC_HALFDAY_COLUMNS = ["is_half_day", "rth_open", "rth_high", "rth_low", "rth_close"]
 
 
-def _hidden_column_names(window: str | None) -> set[str]:
-    if window is None:
-        return set(OHLC_HALFDAY_COLUMNS)
-    return {"is_half_day", _col(window, "open"), _col(window, "high"), _col(window, "low"), _col(window, "close")}
-
-
-def build_display_table(
-    rows: list[dict], hidden_names: set[str] | None = None, window: str | None = None
-) -> tuple:
-    """Registry-driven results table for a given tab (Phase 2 spec §3.6: show_in_table drives the grid)."""
+def build_display_table(rows: list[dict], hidden_names: set[str] | None = None) -> tuple:
+    """Registry-driven results table (Phase 2 spec §3.6: show_in_table drives the grid)."""
     hidden_names = hidden_names or set()
-    specs = [f for f in table_features(window=window) if f.name not in hidden_names]
+    specs = [f for f in table_features() if f.name not in hidden_names]
     display = pd.DataFrame(index=range(len(rows)))
     column_config: dict = {}
     decimal_cols: list[tuple[str, int]] = []
@@ -518,134 +500,6 @@ def build_display_table(
         styled = styled.map(lambda v, cm=color_map: _enum_color(v, cm), subset=[label])
 
     return styled, column_config
-
-
-def _render_tab(
-    conn: sqlite3.Connection, instrument: str, basis: str, date_from, date_to,
-    lookback_mode: str, lookback_n, display_offset: int, hide_ohlc_cols: bool,
-    window: str | None, title: str,
-) -> None:
-    """One full tab body: gyration-overlay controls (independent per tab) ->
-    filters -> results table -> row selection -> candlestick chart(s)."""
-    tab_key = window or "day"
-
-    st.markdown(
-        f'<h2 style="font-size:1.4rem; font-weight:700; margin:0 0 0.4rem 0;">{title}</h2>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        '<h3 style="font-size:1.1rem; font-weight:700; margin:0.5rem 0 0.4rem 0;">Gyration overlay</h3>',
-        unsafe_allow_html=True,
-    )
-    gyr_config = get_config()["gyrations"]
-    thresholds = gyr_config["thresholds"]
-    default_threshold = 50 if 50 in thresholds else thresholds[len(thresholds) // 2]
-
-    show_gyrations = st.checkbox("Show gyrations", value=False, key=f"gyr_show_{tab_key}")
-
-    # Close-based HOD/LOD twins were only built for the whole-RTH session, not
-    # per window (see registry.py's window bundle — no rth_*_close analog).
-    show_close_hilo = False
-    if window is None:
-        mode_col, confirmed_col, closehilo_col = st.columns(3)
-    else:
-        mode_col, confirmed_col = st.columns(2)
-    with mode_col:
-        mode_label_col, mode_widget_col = st.columns([1, 3], vertical_alignment="center")
-        with mode_label_col:
-            st.markdown("Mode")
-        with mode_widget_col:
-            gyr_mode = st.selectbox(
-                "Mode", ["close_to_close", "extreme_to_extreme"], index=0, key=f"gyr_mode_{tab_key}",
-                label_visibility="collapsed",
-            )
-    with confirmed_col:
-        confirmed_only = st.checkbox("Confirmed legs only", value=True, key=f"gyr_confonly_{tab_key}")
-    if window is None:
-        with closehilo_col:
-            show_close_hilo = st.checkbox("Show close-based HOD/LOD", value=False, key=f"gyr_closehilo_{tab_key}")
-
-    sizes = []
-    size_cols = st.columns(GYR_N_SIZES)
-    for i in range(GYR_N_SIZES):
-        with size_cols[i]:
-            with st.expander(f"Size {i + 1}", expanded=(i == 0)):
-                enabled = st.checkbox("Enabled", value=(i == 0), key=f"gyr_size_{i}_enabled_{tab_key}")
-                threshold = st.select_slider(
-                    "Threshold", options=thresholds, value=default_threshold,
-                    key=f"gyr_size_{i}_threshold_{tab_key}",
-                )
-                color_box_col, color_label_col = st.columns([1, 8], vertical_alignment="center")
-                with color_box_col:
-                    color = st.color_picker(
-                        "Color", value=GYR_DEFAULT_COLORS[i], key=f"gyr_size_{i}_color_{tab_key}",
-                        label_visibility="collapsed",
-                    )
-                with color_label_col:
-                    st.markdown("Color")
-                show_retracement = st.checkbox(
-                    "Show retracement zone", value=False, key=f"gyr_size_{i}_retracement_{tab_key}"
-                )
-                sizes.append({
-                    "enabled": enabled, "threshold": threshold, "color": color,
-                    "show_retracement": show_retracement,
-                })
-
-    gyr_settings = {
-        "show": show_gyrations,
-        "mode": gyr_mode,
-        "confirmed_only": confirmed_only,
-        "show_close_hilo": show_close_hilo,
-        "tiebreak": gyr_config["intrabar_tiebreak"],
-        "sizes": sizes,
-    }
-
-    st.markdown("---")
-    filters, lookahead_active = render_filters(conn, instrument, window=window)
-
-    if lookahead_active:
-        st.warning(
-            "An outcome-timing filter is active at offset D or later — this is legitimate "
-            "research on outcomes, but using it to *predict* outcomes is lookahead bias.",
-            icon="⚠️",
-        )
-
-    rows = query_sessions(
-        conn,
-        filters=filters,
-        instrument=instrument,
-        date_range=(str(date_from), str(date_to)),
-        display_offset=display_offset,
-    )
-    rows = _apply_lookback(rows, lookback_mode, lookback_n)
-    st.caption(f"{len(rows)} matching sessions")
-
-    if not rows:
-        st.info("No sessions match the current filters.")
-        return
-
-    df = pd.DataFrame(rows)
-    hidden_names = _hidden_column_names(window) if hide_ohlc_cols else set()
-    styled, column_config = build_display_table(rows, hidden_names, window=window)
-
-    event = st.dataframe(
-        styled, use_container_width=True, hide_index=True, column_config=column_config,
-        on_select="rerun", selection_mode="multi-row", key=f"sessions_table_{tab_key}",
-    )
-
-    selected_rows = event.selection.rows if event and event.selection else []
-    if not selected_rows:
-        st.info("Click a row above to see its candlestick chart (select multiple rows for several charts).")
-        return
-
-    if len(selected_rows) > MAX_CHARTS:
-        st.warning(f"{len(selected_rows)} rows selected — showing charts for the first {MAX_CHARTS}.")
-        selected_rows = selected_rows[:MAX_CHARTS]
-
-    for idx in selected_rows:
-        render_session_chart(conn, instrument, df.iloc[idx], basis, gyr_settings, window=window)
-        st.divider()
 
 
 def main() -> None:
@@ -701,13 +555,114 @@ def main() -> None:
 
     st.markdown("---")
 
-    tabs = st.tabs([title for _, title in WINDOW_TABS])
-    for (window, title), tab in zip(WINDOW_TABS, tabs):
-        with tab:
-            _render_tab(
-                conn, instrument, basis, date_from, date_to, lookback_mode, lookback_n,
-                display_offset, hide_ohlc_cols, window, title,
+    st.markdown(
+        '<h2 style="font-size:1.4rem; font-weight:700; margin:0 0 0.4rem 0;">Day Session</h2>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<h3 style="font-size:1.1rem; font-weight:700; margin:0.5rem 0 0.4rem 0;">Gyration overlay</h3>',
+        unsafe_allow_html=True,
+    )
+    gyr_config = get_config()["gyrations"]
+    thresholds = gyr_config["thresholds"]
+    default_threshold = 50 if 50 in thresholds else thresholds[len(thresholds) // 2]
+
+    show_gyrations = st.checkbox("Show gyrations", value=False)
+
+    mode_col, confirmed_col, closehilo_col = st.columns(3)
+    with mode_col:
+        mode_label_col, mode_widget_col = st.columns([1, 3], vertical_alignment="center")
+        with mode_label_col:
+            st.markdown("Mode")
+        with mode_widget_col:
+            gyr_mode = st.selectbox(
+                "Mode", ["close_to_close", "extreme_to_extreme"], index=0, label_visibility="collapsed",
             )
+    with confirmed_col:
+        confirmed_only = st.checkbox("Confirmed legs only", value=True)
+    with closehilo_col:
+        show_close_hilo = st.checkbox("Show close-based HOD/LOD", value=False)
+
+    sizes = []
+    size_cols = st.columns(GYR_N_SIZES)
+    for i in range(GYR_N_SIZES):
+        with size_cols[i]:
+            with st.expander(f"Size {i + 1}", expanded=(i == 0)):
+                enabled = st.checkbox("Enabled", value=(i == 0), key=f"gyr_size_{i}_enabled")
+                threshold = st.select_slider(
+                    "Threshold", options=thresholds, value=default_threshold, key=f"gyr_size_{i}_threshold"
+                )
+                color_box_col, color_label_col = st.columns([1, 8], vertical_alignment="center")
+                with color_box_col:
+                    color = st.color_picker(
+                        "Color", value=GYR_DEFAULT_COLORS[i], key=f"gyr_size_{i}_color",
+                        label_visibility="collapsed",
+                    )
+                with color_label_col:
+                    st.markdown("Color")
+                show_retracement = st.checkbox(
+                    "Show retracement zone", value=False, key=f"gyr_size_{i}_retracement"
+                )
+                sizes.append({
+                    "enabled": enabled, "threshold": threshold, "color": color,
+                    "show_retracement": show_retracement,
+                })
+
+    gyr_settings = {
+        "show": show_gyrations,
+        "mode": gyr_mode,
+        "confirmed_only": confirmed_only,
+        "show_close_hilo": show_close_hilo,
+        "tiebreak": gyr_config["intrabar_tiebreak"],
+        "sizes": sizes,
+    }
+
+    st.markdown("---")
+    filters, lookahead_active = render_filters(conn, instrument)
+
+    if lookahead_active:
+        st.warning(
+            "An outcome-timing filter is active at offset D or later — this is legitimate "
+            "research on outcomes, but using it to *predict* outcomes is lookahead bias.",
+            icon="⚠️",
+        )
+
+    rows = query_sessions(
+        conn,
+        filters=filters,
+        instrument=instrument,
+        date_range=(str(date_from), str(date_to)),
+        display_offset=display_offset,
+    )
+    rows = _apply_lookback(rows, lookback_mode, lookback_n)
+    st.caption(f"{len(rows)} matching sessions")
+
+    if not rows:
+        st.info("No sessions match the current filters.")
+        return
+
+    df = pd.DataFrame(rows)
+    hidden_names = set(OHLC_HALFDAY_COLUMNS) if hide_ohlc_cols else set()
+    styled, column_config = build_display_table(rows, hidden_names)
+
+    event = st.dataframe(
+        styled, use_container_width=True, hide_index=True, column_config=column_config,
+        on_select="rerun", selection_mode="multi-row", key="sessions_table",
+    )
+
+    selected_rows = event.selection.rows if event and event.selection else []
+    if not selected_rows:
+        st.info("Click a row above to see its candlestick chart (select multiple rows for several charts).")
+        return
+
+    if len(selected_rows) > MAX_CHARTS:
+        st.warning(f"{len(selected_rows)} rows selected — showing charts for the first {MAX_CHARTS}.")
+        selected_rows = selected_rows[:MAX_CHARTS]
+
+    for idx in selected_rows:
+        render_session_chart(conn, instrument, df.iloc[idx], basis, gyr_settings)
+        st.divider()
 
 
 if __name__ == "__main__":
