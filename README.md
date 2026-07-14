@@ -26,9 +26,13 @@ minute-bar CSVs — this path is machine-specific and isn't tracked in git.
 
 ```bash
 python run_etl.py                                    # raw CSVs -> data/db/lookup.sqlite
-.venv/Scripts/streamlit.exe run src/app/dashboard.py  # launch the dashboard
+.venv/Scripts/streamlit.exe run src/app/app.py        # launch the app (Day Session + Gyration Legs pages)
 pytest                                                # run the test suite
 ```
+
+`src/app/dashboard.py` (the Day Session page) can still be run standalone
+(`.venv/Scripts/streamlit.exe run src/app/dashboard.py`) without the Gyration
+Legs page, but `app.py` is the primary entry point.
 
 The ETL is idempotent — delete `data/db/lookup.sqlite` and re-run `run_etl.py` any time
 the schema changes (new registry columns, new gyration thresholds, etc.).

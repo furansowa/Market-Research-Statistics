@@ -35,6 +35,13 @@ def _weekday_name_expr(date_col: str) -> pl.Expr:
 
 def _build_rth_base(minutes: pl.DataFrame, half_day_flag_before: str) -> pl.DataFrame:
     rth = minutes.filter(pl.col("session") == "RTH").sort(["instrument", "date", "ts"])
+    # Continuous per-instrument count of RTH bars only — never resets per
+    # session, only increments on bars that actually exist. Used below to
+    # pull each session's high/low bar position, which the Gyration Legs
+    # page's HtimePrevHtime/LtimePrevLtime derived features (registry.py)
+    # diff against the previous session's — this makes that diff correct on
+    # half-days/holidays for free, with no fixed-bars-per-day assumption.
+    rth = rth.with_columns(pl.int_range(1, pl.len() + 1).over("instrument").alias("_rth_bar_seq"))
 
     agg = rth.group_by(["instrument", "date"], maintain_order=True).agg(
         pl.col("open").first().alias("rth_open"),
@@ -43,6 +50,8 @@ def _build_rth_base(minutes: pl.DataFrame, half_day_flag_before: str) -> pl.Data
         pl.col("low").min().alias("rth_low"),
         pl.col("ts").sort_by("high", descending=True).first().alias("rth_high_time"),
         pl.col("ts").sort_by("low", descending=False).first().alias("rth_low_time"),
+        pl.col("_rth_bar_seq").sort_by("high", descending=True).first().alias("rth_high_bar_seq"),
+        pl.col("_rth_bar_seq").sort_by("low", descending=False).first().alias("rth_low_bar_seq"),
         # close-based twins (Phase 2 spec §3.4) — the gyrations detector runs on
         # closes, not highs/lows, so these reconcile sessions with the leg table.
         pl.col("close").max().alias("rth_high_close"),

@@ -213,6 +213,20 @@ REGISTRY: list[FeatureSpec] = [
         "rth_low_bucket", "categorical", "RTH", "select", "RTH Low (30-min bucket)",
         timing="outcome", show_in_table=False,
     ),
+    # Position of the high/low bar within a continuous, per-instrument count of
+    # RTH bars only (never resets per session, only increments on bars that
+    # actually exist — so it naturally handles half-days/holidays/gaps without
+    # any fixed-per-day assumption). Computed in etl/sessions.py's
+    # _build_rth_base. Internal plumbing for h_time_prev_h_time/
+    # l_time_prev_l_time below — not shown/filterable on its own.
+    FeatureSpec(
+        "rth_high_bar_seq", "numeric", "RTH", None, "RTH High Bar (continuous seq)",
+        timing="outcome", show_in_table=False,
+    ),
+    FeatureSpec(
+        "rth_low_bar_seq", "numeric", "RTH", None, "RTH Low Bar (continuous seq)",
+        timing="outcome", show_in_table=False,
+    ),
     FeatureSpec(
         "rth_range", "numeric", "RTH", "range", "RTH Range",
         compute=lambda df: pl.col("rth_high") - pl.col("rth_low"),
@@ -410,6 +424,49 @@ REGISTRY: list[FeatureSpec] = [
         compute=lambda df: _hilo_flag_expr("rth_close", 5),
         timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
         color_map=_HILO_COLOR_MAP, table_label="Cloc5",
+    ),
+
+    # ---- Gyration Legs page: timing-comparison metrics ----
+    # filter_kind=None / show_in_table=False on all 5: these are only ever
+    # displayed on the separate "Gyration Legs" page (via an explicit `specs`
+    # list passed to build_display_table), never on Day Session's default
+    # table_features() output, and never reachable from render_filters — this
+    # is what keeps them off Day Session structurally, not by convention.
+    FeatureSpec(
+        "hl_time_diff", "numeric", "RTH", None, "High/Low time diff (min)",
+        compute=lambda df: (pl.col("rth_high_minute") - pl.col("rth_low_minute")).abs(),
+        timing="outcome", show_in_table=False, decimals=0, table_label="HLtimeDiff",
+    ),
+    FeatureSpec(
+        "hl_time_vs_prev", "numeric", "RTH", None, "HLtimeDiff vs prev session",
+        compute=lambda df: (
+            pl.when(pl.col("hl_time_diff").shift(1).is_null()).then(pl.lit(None, dtype=pl.Int32))
+            .when(pl.col("hl_time_diff") >= pl.col("hl_time_diff").shift(1)).then(1)
+            .otherwise(-1)
+        ),
+        timing="outcome", show_in_table=False, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="HLtimeVsPrevHLtime",
+    ),
+    FeatureSpec(
+        "h_time_prev_h_time", "numeric", "RTH", None, "RTH High bar-seq vs prev session's",
+        compute=lambda df: pl.col("rth_high_bar_seq") - pl.col("rth_high_bar_seq").shift(1),
+        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="HtimePrevHtime",
+    ),
+    FeatureSpec(
+        "l_time_prev_l_time", "numeric", "RTH", None, "RTH Low bar-seq vs prev session's",
+        compute=lambda df: pl.col("rth_low_bar_seq") - pl.col("rth_low_bar_seq").shift(1),
+        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="LtimePrevLtime",
+    ),
+    FeatureSpec(
+        "ht_vs_lt", "numeric", "RTH", None, "HtimePrevHtime vs LtimePrevLtime",
+        compute=lambda df: (
+            pl.when(pl.col("h_time_prev_h_time").is_null() | pl.col("l_time_prev_l_time").is_null())
+            .then(pl.lit(None, dtype=pl.Int32))
+            .when(pl.col("h_time_prev_h_time") >= pl.col("l_time_prev_l_time")).then(1)
+            .otherwise(-1)
+        ),
+        timing="outcome", show_in_table=False, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="HTvsLT",
     ),
 
     # ---- context / cross-session (previous-session shifts) ----

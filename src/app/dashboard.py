@@ -1,8 +1,10 @@
-"""Panel A — Filter & Browse (SPEC.md section 10, Phase 2 spec §6).
+"""Panel A — Filter & Browse (SPEC.md section 10, Phase 2 spec §6). "Day Session" page.
 
 Registry-driven filters (grouped by timing then basis, each with its own
 offset selector) + registry-driven results table + click-to-chart candlestick.
-Run with: .venv/Scripts/streamlit.exe run src/app/dashboard.py
+Primary entry point is now .venv/Scripts/streamlit.exe run src/app/app.py (the
+multipage app, which also has the Gyration Legs page) — this file still runs
+standalone too: .venv/Scripts/streamlit.exe run src/app/dashboard.py
 """
 
 from __future__ import annotations
@@ -239,14 +241,22 @@ def _render_filter_group(conn: sqlite3.Connection, instrument: str, specs: list,
     return lookahead_active
 
 
-def render_filters(conn: sqlite3.Connection, instrument: str) -> tuple[dict, bool]:
+def render_filters(
+    conn: sqlite3.Connection, instrument: str, *, groups: list[str] | None = None
+) -> tuple[dict, bool]:
     """Registry-driven filters, grouped by timing (pre_open/outcome) then by
     `_filter_group_key` (context / RTH filters / each window).
+
+    `groups`: restrict rendering to these `_FILTER_GROUP_ORDER` keys (e.g. the
+    Gyration Legs page only wants "context"/"rth_filters"). `None` (default)
+    renders every group — Day Session's behavior is unchanged.
 
     Returns (filters, lookahead_active) where filters is keyed by
     (feature_name, offset) and lookahead_active is True if any outcome-timing
     filter is active at offset >= 0 (Phase 2 spec §6.2).
     """
+    group_order = _FILTER_GROUP_ORDER if groups is None else [g for g in _FILTER_GROUP_ORDER if g in groups]
+
     by_timing: dict[str, dict[str, list]] = {"pre_open": {}, "outcome": {}}
     for spec in filterable_features():
         if spec.name == "instrument":
@@ -257,16 +267,16 @@ def render_filters(conn: sqlite3.Connection, instrument: str) -> tuple[dict, boo
     lookahead_active = False
 
     for timing in ["pre_open", "outcome"]:
-        groups = by_timing[timing]
-        if not any(groups.values()):
+        groups_by_key = by_timing[timing]
+        if not any(groups_by_key.get(g) for g in group_order):
             continue
         header = TIMING_LABELS[timing]
         if timing == "outcome":
             header += "  ⚠️"
         st.markdown(f"**{header}**")
 
-        for group_key in _FILTER_GROUP_ORDER:
-            specs = groups.get(group_key, [])
+        for group_key in group_order:
+            specs = groups_by_key.get(group_key, [])
             if not specs:
                 continue
             with st.expander(_FILTER_GROUP_TITLES[group_key], expanded=False):
@@ -468,10 +478,30 @@ def render_session_chart(
 OHLC_HALFDAY_COLUMNS = ["is_half_day", "rth_open", "rth_high", "rth_low", "rth_close"]
 
 
-def build_display_table(rows: list[dict], hidden_names: set[str] | None = None) -> tuple:
-    """Registry-driven results table (Phase 2 spec §3.6: show_in_table drives the grid)."""
+def build_display_table(
+    rows: list[dict],
+    hidden_names: set[str] | None = None,
+    *,
+    specs: list | None = None,
+    extra_columns: list[dict] | None = None,
+) -> tuple:
+    """Registry-driven results table (Phase 2 spec §3.6: show_in_table drives the grid).
+
+    `specs`: defaults to `table_features()` (Day Session's behavior, unchanged)
+    when `None`. The Gyration Legs page passes its own explicit list (via
+    `REGISTRY_BY_NAME`) so it can show `show_in_table=False` specs that must
+    stay off Day Session's table.
+
+    `extra_columns`: list of `{"label", "values", "decimals", "color_kind"}`
+    dicts appended after the spec-driven columns, reusing the same styling
+    pass — this is how columns with no `FeatureSpec` backing at all (the
+    Gyration Legs page's dynamically-sized RHLW{threshold}#/Sum/Avg/Avg%/AvgT
+    block, computed from the `gyrations` table, not `sessions`) get folded in
+    without inventing a `FeatureSpec`-like object for a transient, per-page,
+    per-threshold-selection column group.
+    """
     hidden_names = hidden_names or set()
-    specs = [f for f in table_features() if f.name not in hidden_names]
+    specs = [f for f in (specs if specs is not None else table_features()) if f.name not in hidden_names]
     display = pd.DataFrame(index=range(len(rows)))
     column_config: dict = {}
     decimal_cols: list[tuple[str, int]] = []
@@ -495,6 +525,25 @@ def build_display_table(rows: list[dict], hidden_names: set[str] | None = None) 
             column_config[col_label] = st.column_config.TextColumn(col_label, alignment="left", width="small")
         elif spec.dtype == "time" or spec.color_kind == "enum":
             column_config[col_label] = st.column_config.TextColumn(col_label, alignment="right", width="small")
+
+    for extra in extra_columns or []:
+        col_label = extra["label"]
+        display[col_label] = extra["values"]
+        if extra.get("decimals") is not None:
+            decimal_cols.append((col_label, extra["decimals"]))
+        if extra.get("color_kind") == "pts":
+            pts_cols.append(col_label)
+        elif extra.get("color_kind") == "enum" and extra.get("color_map"):
+            enum_cols[col_label] = extra["color_map"]
+
+    # pandas Styler refuses to style a dataframe past a cell-count cap
+    # (default 262144) — the Gyration Legs page's 55 always-on RHLW columns
+    # push a full 17-year, ~4500-row table well past that. Raise the cap to
+    # fit this specific table rather than a large fixed guess, so it keeps
+    # working as history grows.
+    n_cells = display.shape[0] * display.shape[1]
+    if n_cells > pd.get_option("styler.render.max_elements"):
+        pd.set_option("styler.render.max_elements", n_cells)
 
     styled = display.style
     for label, decimals in decimal_cols:
@@ -607,8 +656,9 @@ def render_stats(rows: list[dict]) -> None:
                 )
 
 
-def main() -> None:
-    st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
+def inject_shared_css() -> None:
+    """Page-content CSS (not app chrome, unlike st.set_page_config) — needs
+    re-injecting on every page, called from each page's own main()."""
     st.markdown(
         '<style>div[data-testid="stVerticalBlock"] { gap: 0.4rem; }\n'
         'div[data-testid="stColorPicker"] button, div[data-testid="stColorPickerBlock"] {\n'
@@ -620,10 +670,12 @@ def main() -> None:
         '}</style>',
         unsafe_allow_html=True,
     )
-    conn = get_connection()
 
+
+def render_global_controls(conn: sqlite3.Connection, instruments: list[str]) -> dict:
+    """Instrument/basis/date-range/lookback/display-offset/hide-OHLC block,
+    shared by both pages."""
     st.header("Global controls")
-    instruments = get_instruments(conn)
 
     row1_col1, row1_col2 = st.columns(2)
     with row1_col1:
@@ -658,20 +710,30 @@ def main() -> None:
     with row2_col4:
         hide_ohlc_cols = st.checkbox("Hide HalfDay /O/H/L/C columns", value=True)
 
-    st.markdown("---")
+    return {
+        "instrument": instrument,
+        "basis": basis,
+        "date_from": date_from,
+        "date_to": date_to,
+        "lookback_mode": lookback_mode,
+        "lookback_n": lookback_n,
+        "display_offset": display_offset,
+        "hide_ohlc_cols": hide_ohlc_cols,
+    }
 
-    st.markdown(
-        '<h2 style="font-size:1.4rem; font-weight:700; margin:0 0 0.4rem 0;">Day Session</h2>',
-        unsafe_allow_html=True,
-    )
 
-    filters, lookahead_active = render_filters(conn, instrument)
-
+def render_gyration_controls(gyr_config: dict, *, fixed_mode: str | None = None) -> dict:
+    """"Gyration overlay" controls block, shared by both pages. `fixed_mode`:
+    when set (the Gyration Legs page passes "close_to_close"), hides the Mode
+    selectbox and hardcodes gyr_settings["mode"] — that page's RHLW columns
+    and leg-pivot scatter can only ever read the precomputed rth/close_to_close
+    combo, so leaving Mode selectable there would let someone pick
+    extreme_to_extreme while the numbers kept silently showing unrelated data.
+    """
     st.markdown(
         '<h3 style="font-size:1.1rem; font-weight:700; margin:0.5rem 0 0.4rem 0;">Gyration overlay</h3>',
         unsafe_allow_html=True,
     )
-    gyr_config = get_config()["gyrations"]
     thresholds = gyr_config["thresholds"]
     default_threshold = 50 if 50 in thresholds else thresholds[len(thresholds) // 2]
 
@@ -679,13 +741,17 @@ def main() -> None:
 
     mode_col, confirmed_col, closehilo_col = st.columns(3)
     with mode_col:
-        mode_label_col, mode_widget_col = st.columns([1, 3], vertical_alignment="center")
-        with mode_label_col:
-            st.markdown("Mode")
-        with mode_widget_col:
-            gyr_mode = st.selectbox(
-                "Mode", ["close_to_close", "extreme_to_extreme"], index=0, label_visibility="collapsed",
-            )
+        if fixed_mode is not None:
+            gyr_mode = fixed_mode
+            st.markdown(f"Mode: **{fixed_mode}**")
+        else:
+            mode_label_col, mode_widget_col = st.columns([1, 3], vertical_alignment="center")
+            with mode_label_col:
+                st.markdown("Mode")
+            with mode_widget_col:
+                gyr_mode = st.selectbox(
+                    "Mode", ["close_to_close", "extreme_to_extreme"], index=0, label_visibility="collapsed",
+                )
     with confirmed_col:
         confirmed_only = st.checkbox("Confirmed legs only", value=True)
     with closehilo_col:
@@ -716,7 +782,7 @@ def main() -> None:
                     "show_retracement": show_retracement,
                 })
 
-    gyr_settings = {
+    return {
         "show": show_gyrations,
         "mode": gyr_mode,
         "confirmed_only": confirmed_only,
@@ -724,6 +790,34 @@ def main() -> None:
         "tiebreak": gyr_config["intrabar_tiebreak"],
         "sizes": sizes,
     }
+
+
+def main(standalone: bool = True) -> None:
+    if standalone:
+        st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
+    inject_shared_css()
+    conn = get_connection()
+
+    instruments = get_instruments(conn)
+    controls = render_global_controls(conn, instruments)
+    instrument = controls["instrument"]
+    basis = controls["basis"]
+    date_from, date_to = controls["date_from"], controls["date_to"]
+    lookback_mode, lookback_n = controls["lookback_mode"], controls["lookback_n"]
+    display_offset = controls["display_offset"]
+    hide_ohlc_cols = controls["hide_ohlc_cols"]
+
+    st.markdown("---")
+
+    st.markdown(
+        '<h2 style="font-size:1.4rem; font-weight:700; margin:0 0 0.4rem 0;">Day Session</h2>',
+        unsafe_allow_html=True,
+    )
+
+    filters, lookahead_active = render_filters(conn, instrument)
+
+    gyr_config = get_config()["gyrations"]
+    gyr_settings = render_gyration_controls(gyr_config)
 
     st.markdown("<div style='margin-top: 2rem'></div>", unsafe_allow_html=True)
     st.markdown("---")
