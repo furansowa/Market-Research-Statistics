@@ -19,8 +19,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from features.registry import (
+    COLOR_BS,
     COLOR_NEG,
     COLOR_POS,
+    COLOR_SB,
     COLOR_ZERO,
     REGISTRY_BY_NAME,
     filterable_features,
@@ -505,6 +507,106 @@ def build_display_table(rows: list[dict], hidden_names: set[str] | None = None) 
     return styled, column_config
 
 
+# (title, column prefix) for each stats section — RTH base columns have no
+# prefix, window sections use their own win_<name>_ prefix. AbsClose stats
+# are shown for every window even though it isn't a *table* column for all
+# of them (win_<name>_abs_close_pts is always computed, just not always
+# surfaced as a grid column — see WINDOW_DISPLAY in registry.py).
+STATS_GROUPS = [
+    ("RTH", ""),
+    ("930-1000", "win_first_30m_"),
+    ("1000-1100", "win_hour_10_11_"),
+    ("930-1100", "win_first_90m_"),
+    ("1430-1600", "win_last_90m_"),
+]
+
+
+# Fixed em-widths so every line's numbers line up vertically once the whole
+# block is set in a monospace font (see render_stats) — label / sub-label /
+# value / percent / separator each get their own column width.
+_STAT_LABEL_W = "6.4em"
+_STAT_SUB_W = "3.4em"
+_STAT_VAL_W = "2.8em"
+_STAT_PCT_W = "4.4em"
+_STAT_SEP_W = "1.4em"
+
+
+def _stat_span(text: str, width: str, color: str | None = None, align: str = "right") -> str:
+    style = f"display:inline-block; width:{width}; text-align:{align};"
+    if color:
+        style += f" color:{color};"
+    return f'<span style="{style}">{text}</span>'
+
+
+def _bs_sb_line(rows: list[dict], col: str) -> str:
+    bs = sum(1 for r in rows if r.get(col) == "BS")
+    sb = sum(1 for r in rows if r.get(col) == "SB")
+    total = bs + sb
+    bs_pct = f"{bs / total * 100:.1f}%" if total else "—"
+    sb_pct = f"{sb / total * 100:.1f}%" if total else "—"
+    bs_color = COLOR_BS if bs > sb else None
+    sb_color = COLOR_SB if sb > bs else None
+    return (
+        _stat_span("BS/SB", _STAT_LABEL_W, align="left")
+        + _stat_span(str(bs), _STAT_VAL_W, bs_color)
+        + _stat_span(bs_pct, _STAT_PCT_W, bs_color)
+        + _stat_span("/", _STAT_SEP_W, align="center")
+        + _stat_span(str(sb), _STAT_VAL_W, sb_color)
+        + _stat_span(sb_pct, _STAT_PCT_W, sb_color)
+    )
+
+
+def _sign_line(rows: list[dict], col: str, label: str) -> str:
+    values = [r.get(col) for r in rows if r.get(col) is not None]
+    neg = sum(1 for v in values if v < 0)
+    pos = sum(1 for v in values if v >= 0)
+    total = neg + pos
+    neg_pct = f"{neg / total * 100:.1f}%" if total else "—"
+    pos_pct = f"{pos / total * 100:.1f}%" if total else "—"
+    neg_color = COLOR_NEG if neg > pos else None
+    pos_color = COLOR_POS if pos > neg else None
+    return (
+        _stat_span(label, _STAT_LABEL_W, align="left")
+        + _stat_span("&lt;0:", _STAT_SUB_W, align="left")
+        + _stat_span(str(neg), _STAT_VAL_W, neg_color)
+        + _stat_span(neg_pct, _STAT_PCT_W, neg_color)
+        + _stat_span("/", _STAT_SEP_W, align="center")
+        + _stat_span("&gt;=0:", _STAT_SUB_W, align="left")
+        + _stat_span(str(pos), _STAT_VAL_W, pos_color)
+        + _stat_span(pos_pct, _STAT_PCT_W, pos_color)
+    )
+
+
+def render_stats(rows: list[dict]) -> None:
+    """Small-font BS/SB, RelClose, AbsClose, RgeVsMA20 breakdowns for the
+    currently filtered `rows`, 3 sections per row (RTH + each active window).
+    Percentages are relative to the non-null count for that metric, not the
+    full row count. The larger side of each line (BS vs SB, </>= 0) is
+    colored using the same colors as the results table; the smaller side
+    stays neutral."""
+    st.markdown(
+        '<h3 style="font-size:1.1rem; font-weight:700; margin:0.5rem 0 0.4rem 0;">Stats</h3>',
+        unsafe_allow_html=True,
+    )
+    for i in range(0, len(STATS_GROUPS), 3):
+        chunk = STATS_GROUPS[i:i + 3]
+        cols = st.columns(3)
+        for col, (title, prefix) in zip(cols, chunk):
+            lines = [
+                _bs_sb_line(rows, f"{prefix}bs_sb"),
+                _sign_line(rows, f"{prefix}rel_close_pts", "RelClose"),
+                _sign_line(rows, f"{prefix}abs_close_pts", "AbsClose"),
+                _sign_line(rows, f"{prefix}range_vs_ma20_pts", "RgeVsMA20"),
+            ]
+            body = "<br>".join(lines)
+            with col:
+                st.markdown(
+                    '<div style="font-family: ui-monospace, Consolas, monospace; '
+                    f'font-size:0.8rem; margin-bottom:1rem;"><b>{title}</b><br>{body}</div>',
+                    unsafe_allow_html=True,
+                )
+
+
 def main() -> None:
     st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
     st.markdown(
@@ -656,6 +758,8 @@ def main() -> None:
         styled, use_container_width=True, hide_index=True, column_config=column_config,
         on_select="rerun", selection_mode="multi-row", key="sessions_table",
     )
+
+    render_stats(rows)
 
     selected_rows = event.selection.rows if event and event.selection else []
     if not selected_rows:
