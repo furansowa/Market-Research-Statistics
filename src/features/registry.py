@@ -56,6 +56,9 @@ COLOR_SB = "#F2C464"     # yellow/orange — SB
 COLOR_BS = "#9AC7E8"     # pastel blue — BS
 
 _BS_SB_COLOR_MAP = {"SB": COLOR_SB, "BS": COLOR_BS}
+# Highest/lowest-of-N flags reuse the BS/SB blue/orange pair (1 = highest =
+# blue, -1 = lowest = orange) instead of the pts green/red, per user request.
+_HILO_COLOR_MAP = {1: COLOR_BS, -1: COLOR_SB, 0: COLOR_ZERO}
 _WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
@@ -90,6 +93,23 @@ def _dir3(pts_col: str) -> pl.Expr:
         .when(pl.col(pts_col) < 0).then(pl.lit("down"))
         .otherwise(pl.lit("flat"))
     )
+
+
+def _hilo_flag_expr(col: str, n: int) -> pl.Expr:
+    """1 if this session's value is the highest of the trailing n sessions
+    (itself included), -1 if the lowest, 0 if in between. Null until n
+    sessions of history exist (min_samples=n — a partial window can't
+    answer "highest of n"). A fully flat window (max == min == value)
+    resolves to 1, since the highest check runs first; negligible for
+    continuous price data."""
+    roll_max = pl.col(col).rolling_max(window_size=n, min_samples=n)
+    roll_min = pl.col(col).rolling_min(window_size=n, min_samples=n)
+    flag = (
+        pl.when(pl.col(col) == roll_max).then(1)
+        .when(pl.col(col) == roll_min).then(-1)
+        .otherwise(0)
+    )
+    return pl.when(roll_max.is_null()).then(None).otherwise(flag)
 
 
 def _bs_sb_expr(high_ts_col: str, low_ts_col: str, nullable: bool = False) -> pl.Expr:
@@ -337,6 +357,59 @@ REGISTRY: list[FeatureSpec] = [
         "abs_close_dir", "categorical", "RTH", "select", "Abs. close direction",
         compute=lambda df: _dir3("abs_close_pts"),
         timing="outcome", show_in_table=False,
+    ),
+
+    # ---- highest/lowest-of-N flags (1 = highest, -1 = lowest, 0 = in
+    # between, over the trailing N sessions including today) ----
+    # Open only needs today's own open + history, so it's knowable pre-open
+    # like rth_open/gap_pts; High/Low/Close need today's outcome data.
+    FeatureSpec(
+        "rth_open_loc3", "numeric", "RTH", "select", "Open highest/lowest of last 3",
+        compute=lambda df: _hilo_flag_expr("rth_open", 3),
+        timing="pre_open", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Oloc3",
+    ),
+    FeatureSpec(
+        "rth_high_loc3", "numeric", "RTH", "select", "High highest/lowest of last 3",
+        compute=lambda df: _hilo_flag_expr("rth_high", 3),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Hloc3",
+    ),
+    FeatureSpec(
+        "rth_low_loc3", "numeric", "RTH", "select", "Low highest/lowest of last 3",
+        compute=lambda df: _hilo_flag_expr("rth_low", 3),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Lloc3",
+    ),
+    FeatureSpec(
+        "rth_close_loc3", "numeric", "RTH", "select", "Close highest/lowest of last 3",
+        compute=lambda df: _hilo_flag_expr("rth_close", 3),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Cloc3",
+    ),
+    FeatureSpec(
+        "rth_open_loc5", "numeric", "RTH", "select", "Open highest/lowest of last 5",
+        compute=lambda df: _hilo_flag_expr("rth_open", 5),
+        timing="pre_open", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Oloc5",
+    ),
+    FeatureSpec(
+        "rth_high_loc5", "numeric", "RTH", "select", "High highest/lowest of last 5",
+        compute=lambda df: _hilo_flag_expr("rth_high", 5),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Hloc5",
+    ),
+    FeatureSpec(
+        "rth_low_loc5", "numeric", "RTH", "select", "Low highest/lowest of last 5",
+        compute=lambda df: _hilo_flag_expr("rth_low", 5),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Lloc5",
+    ),
+    FeatureSpec(
+        "rth_close_loc5", "numeric", "RTH", "select", "Close highest/lowest of last 5",
+        compute=lambda df: _hilo_flag_expr("rth_close", 5),
+        timing="outcome", show_in_table=True, decimals=0, color_kind="enum",
+        color_map=_HILO_COLOR_MAP, table_label="Cloc5",
     ),
 
     # ---- context / cross-session (previous-session shifts) ----
