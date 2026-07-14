@@ -621,6 +621,10 @@ def main() -> None:
     st.markdown("---")
     filters, lookahead_active = render_filters(conn, instrument)
 
+    st.markdown("<div style='margin-top: 2rem'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("<div style='margin-bottom: 0.5rem'></div>", unsafe_allow_html=True)
+
     if lookahead_active:
         st.warning(
             "An outcome-timing filter is active at offset D or later — this is legitimate "
@@ -653,7 +657,6 @@ def main() -> None:
 
     selected_rows = event.selection.rows if event and event.selection else []
     if not selected_rows:
-        st.info("Click a row above to see its candlestick chart (select multiple rows for several charts).")
         return
 
     if len(selected_rows) > MAX_CHARTS:
