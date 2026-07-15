@@ -189,6 +189,16 @@ def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec) -> tuple
     return value, offset
 
 
+# Gyration Legs-only timing-comparison filters (registry.py) — routed to
+# their own "legs_filters" group instead of "rth_filters" so Day Session's
+# default render_filters(groups=None) call (which only ever iterates
+# _FILTER_GROUP_ORDER below) never renders them; only the Legs page's
+# explicit groups=[...,"legs_filters"] call does (see _ALL_FILTER_GROUPS).
+_LEGS_ONLY_FILTER_NAMES = {
+    "hl_time_diff", "hl_time_vs_prev", "h_time_prev_h_time", "l_time_prev_l_time", "ht_vs_lt",
+}
+
+
 def _filter_group_key(spec) -> str:
     """Which sidebar expander a filterable spec belongs in. Window-scoped
     specs (own + their Prev. cross-session companions) group by their window,
@@ -203,6 +213,8 @@ def _filter_group_key(spec) -> str:
     left (see registry.py) so it never reaches this function."""
     if spec.window is not None:
         return spec.window
+    if spec.name in _LEGS_ONLY_FILTER_NAMES:
+        return "legs_filters"
     if spec.basis == "context" and spec.name in ("weekday", "is_half_day"):
         return "context"
     if spec.basis in ("context", "RTH"):
@@ -213,9 +225,16 @@ def _filter_group_key(spec) -> str:
 _FILTER_GROUP_TITLES = {
     "context": "Session Context",
     "rth_filters": "RTH filters",
+    "legs_filters": "Timing filters",
     **WINDOW_FILTER_TITLES,
 }
+# Day Session's default set (render_filters(groups=None) renders exactly
+# this, in this order) — "legs_filters" is deliberately NOT in here.
 _FILTER_GROUP_ORDER = ["context", "rth_filters", "first_30m", "hour_10_11", "first_90m", "last_90m"]
+# Superset used when a caller passes an explicit `groups` list (e.g. the Legs
+# page asking for "legs_filters" too) — lets a group outside Day Session's
+# default set still be resolved/ordered correctly.
+_ALL_FILTER_GROUPS = _FILTER_GROUP_ORDER + ["legs_filters"]
 
 # How many filters to lay out per row within each group's expander. "context"
 # is always exactly weekday + is_half_day, so 2 puts them on one line; every
@@ -255,7 +274,7 @@ def render_filters(
     (feature_name, offset) and lookahead_active is True if any outcome-timing
     filter is active at offset >= 0 (Phase 2 spec §6.2).
     """
-    group_order = _FILTER_GROUP_ORDER if groups is None else [g for g in _FILTER_GROUP_ORDER if g in groups]
+    group_order = _FILTER_GROUP_ORDER if groups is None else [g for g in _ALL_FILTER_GROUPS if g in groups]
 
     by_timing: dict[str, dict[str, list]] = {"pre_open": {}, "outcome": {}}
     for spec in filterable_features():

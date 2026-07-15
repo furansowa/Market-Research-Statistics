@@ -427,18 +427,21 @@ REGISTRY: list[FeatureSpec] = [
     ),
 
     # ---- Gyration Legs page: timing-comparison metrics ----
-    # filter_kind=None / show_in_table=False on all 5: these are only ever
-    # displayed on the separate "Gyration Legs" page (via an explicit `specs`
-    # list passed to build_display_table), never on Day Session's default
-    # table_features() output, and never reachable from render_filters — this
-    # is what keeps them off Day Session structurally, not by convention.
+    # show_in_table=False on all 5: these are only ever displayed on the
+    # separate "Gyration Legs" page (via an explicit `specs` list passed to
+    # build_display_table), never on Day Session's default table_features()
+    # output. Their filters are filterable (filter_kind set below) but land
+    # in the "legs_filters" group, which only the Legs page's render_filters
+    # call requests — Day Session's default `groups=None` call never renders
+    # that group, so they can't leak there either. See
+    # dashboard.py's _filter_group_key/_LEGS_ONLY_FILTER_NAMES.
     FeatureSpec(
-        "hl_time_diff", "numeric", "RTH", None, "High/Low time diff (min)",
+        "hl_time_diff", "numeric", "RTH", "range", "High/Low time diff (min)",
         compute=lambda df: (pl.col("rth_high_minute") - pl.col("rth_low_minute")).abs(),
         timing="outcome", show_in_table=False, decimals=0, table_label="HLtimeDiff",
     ),
     FeatureSpec(
-        "hl_time_vs_prev", "numeric", "RTH", None, "HLtimeDiff vs prev session",
+        "hl_time_vs_prev", "numeric", "RTH", "select", "HLtimeDiff vs prev session",
         compute=lambda df: (
             pl.when(pl.col("hl_time_diff").shift(1).is_null()).then(pl.lit(None, dtype=pl.Int32))
             .when(pl.col("hl_time_diff") >= pl.col("hl_time_diff").shift(1)).then(1)
@@ -448,17 +451,17 @@ REGISTRY: list[FeatureSpec] = [
         color_map=_HILO_COLOR_MAP, table_label="HLtimeVsPrevHLtime",
     ),
     FeatureSpec(
-        "h_time_prev_h_time", "numeric", "RTH", None, "RTH High bar-seq vs prev session's",
+        "h_time_prev_h_time", "numeric", "RTH", "range", "RTH High bar-seq vs prev session's",
         compute=lambda df: pl.col("rth_high_bar_seq") - pl.col("rth_high_bar_seq").shift(1),
-        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="HtimePrevHtime",
+        timing="outcome", show_in_table=False, decimals=0, table_label="HtimePrevHtime",
     ),
     FeatureSpec(
-        "l_time_prev_l_time", "numeric", "RTH", None, "RTH Low bar-seq vs prev session's",
+        "l_time_prev_l_time", "numeric", "RTH", "range", "RTH Low bar-seq vs prev session's",
         compute=lambda df: pl.col("rth_low_bar_seq") - pl.col("rth_low_bar_seq").shift(1),
-        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="LtimePrevLtime",
+        timing="outcome", show_in_table=False, decimals=0, table_label="LtimePrevLtime",
     ),
     FeatureSpec(
-        "ht_vs_lt", "numeric", "RTH", None, "HtimePrevHtime vs LtimePrevLtime",
+        "ht_vs_lt", "numeric", "RTH", "select", "HtimePrevHtime vs LtimePrevLtime",
         compute=lambda df: (
             pl.when(pl.col("h_time_prev_h_time").is_null() | pl.col("l_time_prev_l_time").is_null())
             .then(pl.lit(None, dtype=pl.Int32))

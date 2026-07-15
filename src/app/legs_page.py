@@ -24,7 +24,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from features.registry import REGISTRY_BY_NAME
+from features.registry import COLOR_POS, REGISTRY_BY_NAME
 from query.filters import query_sessions
 from query.legs import leg_aggregates_by_date, leg_pivots
 
@@ -96,6 +96,22 @@ def _leg_extra_columns(
             {"label": f"{prefix}AvgT", "values": avg_ts, "decimals": 0},
         ]
     return extra_columns
+
+
+def _color_relative_time_diff(row: pd.Series) -> pd.Series:
+    """HtimePrevHtime/LtimePrevLtime are colored relative to each other (via
+    the already-computed HTvsLT sign), not independently: green only for
+    whichever one is currently the larger of the pair, the other stays
+    neutral. Chained onto build_display_table's returned Styler with
+    `.apply(..., axis=1)` — pandas accumulates styles per-cell across chained
+    calls, so this doesn't disturb any of that Styler's other coloring."""
+    styles = pd.Series("", index=row.index)
+    flag = row.get("HTvsLT")
+    if flag == 1:
+        styles["HtimePrevHtime"] = f"color: {COLOR_POS}"
+    elif flag == -1:
+        styles["LtimePrevLtime"] = f"color: {COLOR_POS}"
+    return styles
 
 
 def _minute_of_day(ts) -> float:
@@ -202,7 +218,9 @@ def main(standalone: bool = True) -> None:
         unsafe_allow_html=True,
     )
 
-    filters, lookahead_active = render_filters(conn, instrument, groups=["context", "rth_filters"])
+    filters, lookahead_active = render_filters(
+        conn, instrument, groups=["context", "rth_filters", "legs_filters"]
+    )
 
     gyr_config = get_config()["gyrations"]
     gyr_settings = render_gyration_controls(gyr_config, fixed_mode="close_to_close")
@@ -244,6 +262,7 @@ def main(standalone: bool = True) -> None:
     extra_columns = _leg_extra_columns(conn, instrument, rows, rhlw_thresholds, gyr_settings["confirmed_only"])
     specs = [REGISTRY_BY_NAME[name] for name in BASE_COLUMNS]
     styled, column_config = build_display_table(rows, specs=specs, extra_columns=extra_columns)
+    styled = styled.apply(_color_relative_time_diff, axis=1)
 
     event = st.dataframe(
         styled, use_container_width=True, hide_index=True, column_config=column_config,
