@@ -129,3 +129,70 @@ def test_h_time_prev_h_time_handles_half_day_neighbor(conn):
     for _instr, hi_today, hi_prev, h_diff in pairs:
         assert h_diff == hi_today - hi_prev
         assert h_diff > 0, "bar-seq is strictly increasing across sessions"
+
+
+def test_gyrations_v2_columns_present(conn):
+    """Gyrations v2.0 page columns (2026-07-18): rth_close_time, RelHigh/
+    RelLow, and the 9 leg-count-in-window columns."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    expected = {
+        "rth_close_time", "rel_high_pts", "rel_low_pts",
+        "bs_sb_legs_40", "first_legs_40", "last_legs_40",
+        "bs_sb_legs_120", "first_legs_120", "last_legs_120",
+        "bs_sb_legs_200", "first_legs_200", "last_legs_200",
+    }
+    assert expected <= cols
+
+
+def test_rth_close_time_not_before_high_or_low_time(conn):
+    """The close is always the session's last RTH bar -- it can never be
+    earlier than the bar that set the session's own high or low."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM sessions "
+        "WHERE rth_close_time < rth_high_time OR rth_close_time < rth_low_time"
+    ).fetchone()
+    assert row[0] == 0
+
+
+def test_rel_high_low_pts_match_open_diff(conn):
+    row = conn.execute(
+        "SELECT COUNT(*) FROM sessions "
+        "WHERE rel_high_pts != rth_high - rth_open OR rel_low_pts != rth_low - rth_open"
+    ).fetchone()
+    assert row[0] == 0
+
+
+def test_leg_count_columns_non_negative_and_never_null(conn):
+    cols = [
+        "bs_sb_legs_40", "first_legs_40", "last_legs_40",
+        "bs_sb_legs_120", "first_legs_120", "last_legs_120",
+        "bs_sb_legs_200", "first_legs_200", "last_legs_200",
+    ]
+    for col in cols:
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM sessions WHERE {col} IS NULL OR {col} < 0"
+        ).fetchone()
+        assert row[0] == 0, f"{col} has a null or negative value"
+
+
+def test_leg_count_columns_cross_checked_against_gyrations(conn):
+    """Cross-check a sample of sessions' stored bs_sb_legs_40 against a raw
+    SQL containment query over `gyrations`, using that session's own
+    high/low/close boundary timestamps -- validates the stored value against
+    ground truth rather than just "it's non-negative"."""
+    sessions = conn.execute(
+        "SELECT instrument, date, rth_high_time, rth_low_time, rth_close_time, bs_sb_legs_40 "
+        "FROM sessions WHERE bs_sb_legs_40 > 0 ORDER BY date LIMIT 25"
+    ).fetchall()
+    assert sessions, "expected at least one session with a nonzero bs_sb_legs_40"
+
+    for instrument, date, hi_time, lo_time, close_time, stored_count in sessions:
+        t_first, t_second = sorted([hi_time, lo_time])
+        row = conn.execute(
+            "SELECT COUNT(*) FROM gyrations "
+            "WHERE instrument = ? AND scope = 'rth' AND mode = 'extreme_to_extreme' "
+            "AND threshold = 40 AND confirmed = 1 AND start_date = ? "
+            "AND start_ts >= ? AND end_ts <= ?",
+            (instrument, date, t_first, t_second),
+        ).fetchone()
+        assert row[0] == stored_count, f"{instrument}/{date}: stored={stored_count} recomputed={row[0]}"

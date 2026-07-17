@@ -58,12 +58,16 @@ def _build_rth_base(minutes: pl.DataFrame, half_day_flag_before: str) -> pl.Data
         pl.col("close").min().alias("rth_low_close"),
         pl.col("ts").sort_by("close", descending=True).first().alias("rth_high_close_ts"),
         pl.col("ts").sort_by("close", descending=False).first().alias("rth_low_close_ts"),
-        pl.col("ts").last().alias("_last_rth_ts"),
+        # Actual timestamp of the session's last RTH bar -- NOT a fixed 15:59,
+        # since half-days end earlier. Used for is_half_day below, and kept as
+        # a real column (registry.py's rth_close_time) for the Gyrations v2.0
+        # page's leg-count window boundaries (etl/leg_windows.py).
+        pl.col("ts").last().alias("rth_close_time"),
     )
 
     agg = agg.with_columns(
         _weekday_name_expr("date").alias("weekday"),
-        is_half_day_expr("_last_rth_ts", half_day_flag_before).alias("is_half_day"),
+        is_half_day_expr("rth_close_time", half_day_flag_before).alias("is_half_day"),
     )
 
     agg = agg.with_columns(
@@ -77,7 +81,7 @@ def _build_rth_base(minutes: pl.DataFrame, half_day_flag_before: str) -> pl.Data
         time_bucket_30min("rth_low_close_ts").alias("rth_low_close_bucket"),
     )
 
-    return agg.drop("_last_rth_ts")
+    return agg
 
 
 def _in_window(ts_col: str, start: str, end: str) -> pl.Expr:

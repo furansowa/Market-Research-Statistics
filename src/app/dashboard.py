@@ -198,6 +198,18 @@ _LEGS_ONLY_FILTER_NAMES = {
     "hl_time_diff", "hl_time_vs_prev", "h_time_prev_h_time", "l_time_prev_l_time", "ht_vs_lt",
 }
 
+# Gyrations v2.0-only leg-count-in-window filters — a SEPARATE set/group from
+# the one above, even though both are "this page's own filters, hidden from
+# the others": reusing "legs_filters" here would silently add these 9 filters
+# to the *existing* Gyration Legs page's "Timing filters" expander too, since
+# that group is rendered by name, not by page. Only the v2.0 page's
+# render_filters call requests "legs_filters_v2".
+_LEGS_ONLY_V2_FILTER_NAMES = {
+    "bs_sb_legs_40", "first_legs_40", "last_legs_40",
+    "bs_sb_legs_120", "first_legs_120", "last_legs_120",
+    "bs_sb_legs_200", "first_legs_200", "last_legs_200",
+}
+
 
 def _filter_group_key(spec) -> str:
     """Which sidebar expander a filterable spec belongs in. Window-scoped
@@ -215,6 +227,8 @@ def _filter_group_key(spec) -> str:
         return spec.window
     if spec.name in _LEGS_ONLY_FILTER_NAMES:
         return "legs_filters"
+    if spec.name in _LEGS_ONLY_V2_FILTER_NAMES:
+        return "legs_filters_v2"
     if spec.basis == "context" and spec.name in ("weekday", "is_half_day"):
         return "context"
     if spec.basis in ("context", "RTH"):
@@ -226,15 +240,18 @@ _FILTER_GROUP_TITLES = {
     "context": "Session Context",
     "rth_filters": "RTH filters",
     "legs_filters": "Timing filters",
+    "legs_filters_v2": "Gyration Filters",
     **WINDOW_FILTER_TITLES,
 }
 # Day Session's default set (render_filters(groups=None) renders exactly
-# this, in this order) — "legs_filters" is deliberately NOT in here.
+# this, in this order) — "legs_filters"/"legs_filters_v2" are deliberately NOT
+# in here.
 _FILTER_GROUP_ORDER = ["context", "rth_filters", "first_30m", "hour_10_11", "first_90m", "last_90m"]
 # Superset used when a caller passes an explicit `groups` list (e.g. the Legs
-# page asking for "legs_filters" too) — lets a group outside Day Session's
-# default set still be resolved/ordered correctly.
-_ALL_FILTER_GROUPS = _FILTER_GROUP_ORDER + ["legs_filters"]
+# page asking for "legs_filters", or the Gyrations v2.0 page asking for
+# "legs_filters_v2") — lets a group outside Day Session's default set still be
+# resolved/ordered correctly.
+_ALL_FILTER_GROUPS = _FILTER_GROUP_ORDER + ["legs_filters", "legs_filters_v2"]
 
 # How many filters to lay out per row within each group's expander. "context"
 # is always exactly weekday + is_half_day, so 2 puts them on one line; every
@@ -497,6 +514,27 @@ def render_session_chart(
 OHLC_HALFDAY_COLUMNS = ["is_half_day", "rth_open", "rth_high", "rth_low", "rth_close"]
 
 
+def _content_column_width(values: list, decimals: int | None) -> int:
+    """Pixel width sized to the widest *value* actually rendered in this
+    column, ignoring the header label entirely -- most columns here have
+    short numeric/flag values (single digits, "1"/"-1", a handful of digits)
+    under a much longer abbreviated header (e.g. "HLtimeVsPrevHLtime"), so
+    fitting to the label would waste a lot of horizontal space across a
+    table with this many columns. The header text that no longer fits just
+    gets ellipsized by the grid itself; the full label is available via the
+    column's `help` tooltip on hover (see build_display_table)."""
+    max_len = 1  # "—" (na_rep) is always a possible rendered value
+    for v in values:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            continue
+        if decimals is not None and isinstance(v, (int, float)):
+            s = f"{v:.{decimals}f}"
+        else:
+            s = str(v)
+        max_len = max(max_len, len(s))
+    return max(50, max_len * 8 + 24)
+
+
 def build_display_table(
     rows: list[dict],
     hidden_names: set[str] | None = None,
@@ -540,10 +578,10 @@ def build_display_table(
         elif spec.color_kind == "enum" and spec.color_map:
             enum_cols[col_label] = spec.color_map
 
-        if spec.name == "weekday":
-            column_config[col_label] = st.column_config.TextColumn(col_label, alignment="left", width="small")
-        elif spec.dtype == "time" or spec.color_kind == "enum":
-            column_config[col_label] = st.column_config.TextColumn(col_label, alignment="right", width="small")
+        alignment = "left" if spec.name == "weekday" else ("right" if spec.dtype == "time" or spec.color_kind == "enum" else None)
+        column_config[col_label] = st.column_config.Column(
+            col_label, width=_content_column_width(values, spec.decimals), help=spec.label, alignment=alignment,
+        )
 
     for extra in extra_columns or []:
         col_label = extra["label"]
@@ -554,6 +592,10 @@ def build_display_table(
             pts_cols.append(col_label)
         elif extra.get("color_kind") == "enum" and extra.get("color_map"):
             enum_cols[col_label] = extra["color_map"]
+
+        column_config[col_label] = st.column_config.Column(
+            col_label, width=_content_column_width(extra["values"], extra.get("decimals")),
+        )
 
     # pandas Styler refuses to style a dataframe past a cell-count cap
     # (default 262144) — the Gyration Legs page's 55 always-on RHLW columns

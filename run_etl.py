@@ -25,6 +25,7 @@ from etl.load import (
     write_gyrations_rows,
 )
 from etl.gyrations import compute_session_scope_legs, compute_continuous_scope_legs
+from etl.leg_windows import attach_leg_count_columns
 
 
 def main() -> None:
@@ -53,6 +54,33 @@ def main() -> None:
     sessions = build_sessions(minutes, half_day_flag_before=half_day_flag_before, windows=config["windows"])
     print(f"Built {sessions.height:,} sessions in {time.time() - t2:.1f}s")
 
+    gyr_config = config["gyrations"]
+    thresholds = gyr_config["thresholds"]
+    tiebreak = gyr_config["intrabar_tiebreak"]
+    instruments = minutes["instrument"].unique().sort().to_list()
+    all_rth_bars = minutes.filter(pl.col("session") == "RTH")
+
+    # Gyrations v2.0 page: the 9 leg-count-in-window columns need
+    # rth/extreme_to_extreme legs at 40/120/200 to exist *before* sessions is
+    # written, so they can be persisted as real columns (see etl/leg_windows.py).
+    # These 3 thresholds get recomputed again below when the main precompute
+    # loop reaches the new rth/extreme_to_extreme entry -- a deliberate,
+    # near-zero-cost duplication rather than threading this pre-step's rows
+    # into that loop's per-threshold structure.
+    t2b = time.time()
+    legs_by_threshold: dict[float, list[dict]] = {40: [], 120: [], 200: []}
+    for instrument in instruments:
+        rth_bars = all_rth_bars.filter(pl.col("instrument") == instrument)
+        for threshold in legs_by_threshold:
+            legs_by_threshold[threshold].extend(
+                compute_session_scope_legs(
+                    rth_bars, instrument, "rth", threshold,
+                    mode="extreme_to_extreme", tiebreak=tiebreak,
+                )
+            )
+    sessions = attach_leg_count_columns(sessions, all_rth_bars, legs_by_threshold)
+    print(f"Computed leg-count window columns in {time.time() - t2b:.1f}s")
+
     t3 = time.time()
     conn = get_connection(db_path)
     try:
@@ -63,14 +91,9 @@ def main() -> None:
 
         t4 = time.time()
         create_gyrations_table(conn)
-        gyr_config = config["gyrations"]
-        thresholds = gyr_config["thresholds"]
-        instruments = minutes["instrument"].unique().sort().to_list()
 
         for instrument in instruments:
-            rth_bars = minutes.filter(
-                (pl.col("instrument") == instrument) & (pl.col("session") == "RTH")
-            )
+            rth_bars = all_rth_bars.filter(pl.col("instrument") == instrument)
             eth_bars = minutes.filter(pl.col("instrument") == instrument)
 
             for entry in gyr_config["precompute"]:
@@ -88,9 +111,13 @@ def main() -> None:
                 total_legs = 0
                 for threshold in thresholds:
                     if scope == "continuous":
-                        rows = compute_continuous_scope_legs(bars, instrument, threshold, mode)
+                        rows = compute_continuous_scope_legs(
+                            bars, instrument, threshold, mode, tiebreak=tiebreak
+                        )
                     else:
-                        rows = compute_session_scope_legs(bars, instrument, scope, threshold, mode)
+                        rows = compute_session_scope_legs(
+                            bars, instrument, scope, threshold, mode, tiebreak=tiebreak
+                        )
                     write_gyrations_rows(conn, rows)
                     total_legs += len(rows)
                 conn.commit()

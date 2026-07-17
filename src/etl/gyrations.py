@@ -13,6 +13,9 @@ and the rest of the ETL. Three scopes:
 
 For `rth`/`eth`, `start_date == end_date` always (neither scope crosses a
 calendar date). For `continuous`, a leg's `start_date`/`end_date` can differ.
+
+Both `mode="close_to_close"` and `mode="extreme_to_extreme"` are supported
+(§2.2) -- the latter needs full OHLC bars and a `tiebreak`, not just closes.
 """
 
 from __future__ import annotations
@@ -24,18 +27,28 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gyrations.detect import detect_legs_close_to_close
+from gyrations.detect import detect_legs_close_to_close, detect_legs_extreme_to_extreme
 
 _DETECTORS = {
     "close_to_close": detect_legs_close_to_close,
+    "extreme_to_extreme": detect_legs_extreme_to_extreme,
 }
 
 
 def _legs_to_rows(
-    closes: list[float], ts_list: list, instrument: str, scope: str, threshold: float, mode: str
+    bars: list[tuple], ts_list: list, instrument: str, scope: str, threshold: float, mode: str,
+    tiebreak: str = "bar_direction",
 ) -> list[dict]:
+    """`bars` is a list of (open, high, low, close) tuples. close_to_close only
+    ever looks at the close (bars[i][3]); extreme_to_extreme needs the full
+    OHLC tuple plus a tiebreak. One code path for both rather than two
+    divergent bar-list constructions per caller -- doesn't change
+    close_to_close's actual values (same closes, same order)."""
     detector = _DETECTORS[mode]
-    legs = detector(closes, threshold)
+    if mode == "close_to_close":
+        legs = detector([bar[3] for bar in bars], threshold)
+    else:
+        legs = detector(bars, threshold, tiebreak=tiebreak)
 
     rows = []
     for leg in legs:
@@ -68,7 +81,8 @@ def _legs_to_rows(
 
 
 def compute_session_scope_legs(
-    minutes: pl.DataFrame, instrument: str, scope: str, threshold: float, mode: str = "close_to_close"
+    minutes: pl.DataFrame, instrument: str, scope: str, threshold: float, mode: str = "close_to_close",
+    tiebreak: str = "bar_direction",
 ) -> list[dict]:
     """`rth` or `eth` scope: one detector run per (instrument, date).
 
@@ -85,10 +99,10 @@ def compute_session_scope_legs(
     partitions = minutes.sort("ts").partition_by(["date"], as_dict=True)
 
     for (_date,) in sorted(partitions.keys()):
-        bars = partitions[(_date,)]
-        closes = bars["close"].to_list()
-        ts_list = bars["ts"].to_list()
-        rows.extend(_legs_to_rows(closes, ts_list, instrument, scope, threshold, mode))
+        bars_df = partitions[(_date,)]
+        bars = list(zip(bars_df["open"], bars_df["high"], bars_df["low"], bars_df["close"]))
+        ts_list = bars_df["ts"].to_list()
+        rows.extend(_legs_to_rows(bars, ts_list, instrument, scope, threshold, mode, tiebreak))
 
     for global_index, row in enumerate(rows):
         row["leg_index"] = global_index
@@ -97,10 +111,11 @@ def compute_session_scope_legs(
 
 
 def compute_continuous_scope_legs(
-    minutes: pl.DataFrame, instrument: str, threshold: float, mode: str = "close_to_close"
+    minutes: pl.DataFrame, instrument: str, threshold: float, mode: str = "close_to_close",
+    tiebreak: str = "bar_direction",
 ) -> list[dict]:
     """`continuous` scope: one detector run over the entire per-instrument series."""
-    bars = minutes.sort("ts")
-    closes = bars["close"].to_list()
-    ts_list = bars["ts"].to_list()
-    return _legs_to_rows(closes, ts_list, instrument, "continuous", threshold, mode)
+    bars_df = minutes.sort("ts")
+    bars = list(zip(bars_df["open"], bars_df["high"], bars_df["low"], bars_df["close"]))
+    ts_list = bars_df["ts"].to_list()
+    return _legs_to_rows(bars, ts_list, instrument, "continuous", threshold, mode, tiebreak)

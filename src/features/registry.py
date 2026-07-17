@@ -197,6 +197,13 @@ REGISTRY: list[FeatureSpec] = [
         "rth_low_time", "time", "RTH", None, "RTH Low Time",
         timing="outcome", show_in_table=True, formatter=_hhmm, table_label="Ltime",
     ),
+    # Actual timestamp of the session's last RTH bar (not a fixed 15:59 --
+    # half-days end earlier). Plumbing for the Gyrations v2.0 page's leg-count
+    # window columns (etl/leg_windows.py) -- not shown/filterable on its own.
+    FeatureSpec(
+        "rth_close_time", "time", "RTH", None, "RTH Close Time",
+        timing="outcome", show_in_table=False, formatter=_hhmm,
+    ),
     FeatureSpec(
         "rth_high_minute", "numeric", "RTH", "range", "RTH High Bar",
         timing="outcome", show_in_table=True, table_label="Hbar",
@@ -362,6 +369,20 @@ REGISTRY: list[FeatureSpec] = [
         compute=lambda df: _dir3("rel_close_pts"),
         timing="outcome", show_in_table=False,
     ),
+    # Gyrations v2.0 page only (show_in_table=False so Day Session's default
+    # table_features() never includes them) -- no filters requested for
+    # either. Coloring is comparative (whichever has the larger absolute
+    # value wins), implemented page-locally, not via color_kind.
+    FeatureSpec(
+        "rel_high_pts", "numeric", "RTH", None, "Rel. high (high-open, pts)",
+        compute=lambda df: pl.col("rth_high") - pl.col("rth_open"),
+        timing="outcome", show_in_table=False, decimals=1, table_label="RelHigh",
+    ),
+    FeatureSpec(
+        "rel_low_pts", "numeric", "RTH", None, "Rel. low (low-open, pts)",
+        compute=lambda df: pl.col("rth_low") - pl.col("rth_open"),
+        timing="outcome", show_in_table=False, decimals=1, table_label="RelLow",
+    ),
     FeatureSpec(
         "abs_close_pts", "numeric", "RTH", "range", "Abs. close (vs prev close, pts)",
         compute=lambda df: pl.col("rth_close") - pl.col("rth_close").shift(1),
@@ -470,6 +491,51 @@ REGISTRY: list[FeatureSpec] = [
         ),
         timing="outcome", show_in_table=False, decimals=0, color_kind="enum",
         color_map=_HILO_COLOR_MAP, table_label="HTvsLT",
+    ),
+
+    # ---- Gyrations v2.0 page: leg-count-in-window columns ----
+    # Precomputed in etl/leg_windows.py (confirmed extreme_to_extreme legs,
+    # thresholds 40/120/200) and persisted as real sessions columns -- 0 not
+    # null when no legs match. show_in_table=False (v2.0-only, via its own
+    # explicit specs list); filterable, but routed to a group ONLY the v2.0
+    # page's render_filters call requests (see dashboard.py's
+    # _LEGS_ONLY_V2_FILTER_NAMES/"legs_filters_v2") so this doesn't add
+    # filters to the existing Gyration Legs page's "Timing filters" group.
+    FeatureSpec(
+        "bs_sb_legs_40", "numeric", "RTH", "range", "BS/SB-window legs (T=40, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="BS/SBLegs40",
+    ),
+    FeatureSpec(
+        "first_legs_40", "numeric", "RTH", "range", "Open-to-first-extreme legs (T=40, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="FirstLegs40",
+    ),
+    FeatureSpec(
+        "last_legs_40", "numeric", "RTH", "range", "Second-extreme-to-close legs (T=40, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="LastLegs40",
+    ),
+    FeatureSpec(
+        "bs_sb_legs_120", "numeric", "RTH", "range", "BS/SB-window legs (T=120, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="BS/SBLegs120",
+    ),
+    FeatureSpec(
+        "first_legs_120", "numeric", "RTH", "range", "Open-to-first-extreme legs (T=120, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="FirstLegs120",
+    ),
+    FeatureSpec(
+        "last_legs_120", "numeric", "RTH", "range", "Second-extreme-to-close legs (T=120, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="LastLegs120",
+    ),
+    FeatureSpec(
+        "bs_sb_legs_200", "numeric", "RTH", "range", "BS/SB-window legs (T=200, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="BS/SBLegs200",
+    ),
+    FeatureSpec(
+        "first_legs_200", "numeric", "RTH", "range", "Open-to-first-extreme legs (T=200, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="FirstLegs200",
+    ),
+    FeatureSpec(
+        "last_legs_200", "numeric", "RTH", "range", "Second-extreme-to-close legs (T=200, extreme)",
+        timing="outcome", show_in_table=False, decimals=0, table_label="LastLegs200",
     ),
 
     # ---- context / cross-session (previous-session shifts) ----
