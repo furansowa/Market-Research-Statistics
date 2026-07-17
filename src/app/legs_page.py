@@ -92,7 +92,7 @@ def _leg_extra_columns(
             {"label": f"{prefix}#", "values": counts, "decimals": 0},
             {"label": f"{prefix}Sum", "values": sums, "decimals": 0},
             {"label": f"{prefix}Avg", "values": avgs, "decimals": 0},
-            {"label": f"{prefix}Avg%", "values": avg_pcts, "decimals": 1},
+            {"label": f"{prefix}Avg%", "values": avg_pcts, "decimals": 2},
             {"label": f"{prefix}AvgT", "values": avg_ts, "decimals": 0},
         ]
     return extra_columns
