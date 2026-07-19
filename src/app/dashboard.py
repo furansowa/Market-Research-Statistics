@@ -707,6 +707,7 @@ def render_stats(rows: list[dict]) -> None:
                 _sign_line(rows, f"{prefix}rel_close_pts", "RelClose"),
                 _sign_line(rows, f"{prefix}abs_close_pts", "AbsClose"),
                 _sign_line(rows, f"{prefix}range_vs_ma20_pts", "RgeVsMA20"),
+                _sign_line(rows, f"{prefix}gap_pts", "Gap"),
             ]
             body = "<br>".join(lines)
             with col:

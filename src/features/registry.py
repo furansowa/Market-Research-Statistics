@@ -112,6 +112,21 @@ def _hilo_flag_expr(col: str, n: int) -> pl.Expr:
     return pl.when(roll_max.is_null()).then(None).otherwise(flag)
 
 
+def _prev_n_low(n_sessions: int) -> pl.Expr:
+    """Lowest RTH low across the `n_sessions` immediately before today (today
+    itself excluded). n_sessions=1 is exactly rth_low.shift(1) -- the
+    existing single-prior-session "prev range" behavior; n_sessions>1 rolls
+    that back further (e.g. "prev3" per the user's own definition = the
+    previous *2* sessions combined, n_sessions=2). min_samples=n_sessions
+    requires the full window -- null with insufficient history, same
+    convention as _hilo_flag_expr above."""
+    return pl.col("rth_low").shift(1).rolling_min(window_size=n_sessions, min_samples=n_sessions)
+
+
+def _prev_n_high(n_sessions: int) -> pl.Expr:
+    return pl.col("rth_high").shift(1).rolling_max(window_size=n_sessions, min_samples=n_sessions)
+
+
 def _bs_sb_expr(high_ts_col: str, low_ts_col: str, nullable: bool = False) -> pl.Expr:
     expr = (
         pl.when(pl.col(high_ts_col) < pl.col(low_ts_col)).then(pl.lit("SB"))
@@ -600,6 +615,101 @@ REGISTRY: list[FeatureSpec] = [
             / (pl.col("rth_high").shift(1) - pl.col("rth_low").shift(1))
         ),
         timing="pre_open", decimals=2,
+    ),
+
+    # ---- Open/Close vs multi-session prior range ----
+    # "prev3"/"prev5" per the user's own definition: prev3 = combined range of
+    # the previous 2 sessions, prev5 = combined range of the previous 4
+    # sessions ("prev" alone, above, is the previous 1 session). Close
+    # variants are timing="outcome" (need today's own close); Open variants
+    # are timing="pre_open" like the existing "prev" ones above.
+    FeatureSpec(
+        "open_vs_prev3_range", "categorical", "context", "select", "Open vs prev3 RTH range",
+        # Explicit null guard: an unguarded when/otherwise chain would let a
+        # null _prev_n_low(2)/_prev_n_high(2) (insufficient history) fall
+        # through to "inside" instead of null -- the same latent quirk the
+        # pre-existing open_vs_prev_range above has (flagged separately, not
+        # touched here), avoided here the same way _hilo_flag_expr avoids it.
+        compute=lambda df: (
+            pl.when(_prev_n_low(2).is_null()).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("rth_open") < _prev_n_low(2)).then(pl.lit("below"))
+            .when(pl.col("rth_open") > _prev_n_high(2)).then(pl.lit("above"))
+            .otherwise(pl.lit("inside"))
+        ),
+        timing="pre_open",
+    ),
+    FeatureSpec(
+        "open_vs_prev3_range_pct", "numeric", "context", "range",
+        "Open position in prev3 range (0=low,1=high)",
+        compute=lambda df: (pl.col("rth_open") - _prev_n_low(2)) / (_prev_n_high(2) - _prev_n_low(2)),
+        timing="pre_open", decimals=2,
+    ),
+    FeatureSpec(
+        "open_vs_prev5_range", "categorical", "context", "select", "Open vs prev5 RTH range",
+        compute=lambda df: (
+            pl.when(_prev_n_low(4).is_null()).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("rth_open") < _prev_n_low(4)).then(pl.lit("below"))
+            .when(pl.col("rth_open") > _prev_n_high(4)).then(pl.lit("above"))
+            .otherwise(pl.lit("inside"))
+        ),
+        timing="pre_open",
+    ),
+    FeatureSpec(
+        "open_vs_prev5_range_pct", "numeric", "context", "range",
+        "Open position in prev5 range (0=low,1=high)",
+        compute=lambda df: (pl.col("rth_open") - _prev_n_low(4)) / (_prev_n_high(4) - _prev_n_low(4)),
+        timing="pre_open", decimals=2,
+    ),
+    FeatureSpec(
+        "close_vs_prev_range", "categorical", "context", "select", "Close vs prev RTH range",
+        compute=lambda df: (
+            pl.when(pl.col("rth_low").shift(1).is_null()).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("rth_close") < pl.col("rth_low").shift(1)).then(pl.lit("below"))
+            .when(pl.col("rth_close") > pl.col("rth_high").shift(1)).then(pl.lit("above"))
+            .otherwise(pl.lit("inside"))
+        ),
+        timing="outcome",
+    ),
+    FeatureSpec(
+        "close_vs_prev_range_pct", "numeric", "context", "range",
+        "Close position in prev range (0=low,1=high)",
+        compute=lambda df: (
+            (pl.col("rth_close") - pl.col("rth_low").shift(1))
+            / (pl.col("rth_high").shift(1) - pl.col("rth_low").shift(1))
+        ),
+        timing="outcome", decimals=2,
+    ),
+    FeatureSpec(
+        "close_vs_prev3_range", "categorical", "context", "select", "Close vs prev3 RTH range",
+        compute=lambda df: (
+            pl.when(_prev_n_low(2).is_null()).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("rth_close") < _prev_n_low(2)).then(pl.lit("below"))
+            .when(pl.col("rth_close") > _prev_n_high(2)).then(pl.lit("above"))
+            .otherwise(pl.lit("inside"))
+        ),
+        timing="outcome",
+    ),
+    FeatureSpec(
+        "close_vs_prev3_range_pct", "numeric", "context", "range",
+        "Close position in prev3 range (0=low,1=high)",
+        compute=lambda df: (pl.col("rth_close") - _prev_n_low(2)) / (_prev_n_high(2) - _prev_n_low(2)),
+        timing="outcome", decimals=2,
+    ),
+    FeatureSpec(
+        "close_vs_prev5_range", "categorical", "context", "select", "Close vs prev5 RTH range",
+        compute=lambda df: (
+            pl.when(_prev_n_low(4).is_null()).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("rth_close") < _prev_n_low(4)).then(pl.lit("below"))
+            .when(pl.col("rth_close") > _prev_n_high(4)).then(pl.lit("above"))
+            .otherwise(pl.lit("inside"))
+        ),
+        timing="outcome",
+    ),
+    FeatureSpec(
+        "close_vs_prev5_range_pct", "numeric", "context", "range",
+        "Close position in prev5 range (0=low,1=high)",
+        compute=lambda df: (pl.col("rth_close") - _prev_n_low(4)) / (_prev_n_high(4) - _prev_n_low(4)),
+        timing="outcome", decimals=2,
     ),
 
     # ---- reserved ----
