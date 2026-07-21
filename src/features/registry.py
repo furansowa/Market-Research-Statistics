@@ -60,6 +60,9 @@ _BS_SB_COLOR_MAP = {"SB": COLOR_SB, "BS": COLOR_BS}
 # blue, -1 = lowest = orange) instead of the pts green/red, per user request.
 _HILO_COLOR_MAP = {1: COLOR_BS, -1: COLOR_SB, 0: COLOR_ZERO}
 _WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+# macro shape templates, simple -> complex; M+k/W+k variants fall past the end
+_SHAPE_ORDER = ["/", "\\", "V", "A", "N", "\\/\\", "M", "W",
+                "M+1", "W+1", "M+2", "W+2", "M+3", "W+3", "flat"]
 
 
 @dataclass(frozen=True)
@@ -551,6 +554,27 @@ REGISTRY: list[FeatureSpec] = [
     FeatureSpec(
         "last_legs_200", "numeric", "RTH", "range", "Second-extreme-to-close legs (T=200, extreme)",
         timing="outcome", show_in_table=False, decimals=0, table_label="LastLegs200",
+    ),
+
+    # ---- Gyrations v2.0 page: macro shape templates ----
+    # Persisted into sessions by run_shapes.py (post-ETL step) from the
+    # session_shapes table -- how the running HOD/LOD was built from confirmed
+    # extreme_to_extreme legs (src/gyrations/shapes.py). Same v2.0-only
+    # routing as the leg-count columns above.
+    FeatureSpec(
+        "shape_40", "categorical", "RTH", "select", "Day shape (T=40, extreme)",
+        timing="outcome", show_in_table=False, table_label="Shape40",
+        value_order=_SHAPE_ORDER,
+    ),
+    FeatureSpec(
+        "shape_120", "categorical", "RTH", "select", "Day shape (T=120, extreme)",
+        timing="outcome", show_in_table=False, table_label="Shape120",
+        value_order=_SHAPE_ORDER,
+    ),
+    FeatureSpec(
+        "shape_200", "categorical", "RTH", "select", "Day shape (T=200, extreme)",
+        timing="outcome", show_in_table=False, table_label="Shape200",
+        value_order=_SHAPE_ORDER,
     ),
 
     # ---- context / cross-session (previous-session shifts) ----

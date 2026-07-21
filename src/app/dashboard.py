@@ -208,6 +208,7 @@ _LEGS_ONLY_V2_FILTER_NAMES = {
     "bs_sb_legs_40", "first_legs_40", "last_legs_40",
     "bs_sb_legs_120", "first_legs_120", "last_legs_120",
     "bs_sb_legs_200", "first_legs_200", "last_legs_200",
+    "shape_40", "shape_120", "shape_200",
 }
 
 

@@ -79,7 +79,8 @@ LEG_DETAIL_CONFIRMED_ONLY = True
 # (between HTvsLT and Range), then RelHigh/RelLow (after RelClose) — all
 # v2.0-only, kept off Day Session's table the same way.
 BASE_COLUMNS = [
-    "date", "weekday", "bs_sb", "rth_high_time", "rth_low_time",
+    "date", "weekday", "bs_sb", "shape_40", "shape_120", "shape_200",
+    "rth_high_time", "rth_low_time",
     "hl_time_diff", "hl_time_vs_prev", "h_time_prev_h_time", "l_time_prev_l_time", "ht_vs_lt",
     "bs_sb_legs_40", "first_legs_40", "last_legs_40",
     "bs_sb_legs_120", "first_legs_120", "last_legs_120",
@@ -366,6 +367,117 @@ def _chart_relative_to_open(conn, instrument: str, selected_rows: list[dict]) ->
     return fig
 
 
+# Morning card: character forecast for the next session, using ONLY info
+# known at the latest session's close (user constraint 2026-07-21: no
+# overnight, no intraday; the gap is the only extra at-open variable and is
+# not needed here). Rules and their probabilities were validated
+# out-of-sample (2023-26 in-sample, 2020-23 OOS, both confirming z>=3):
+# choppiness/character is predictable from the prior day; direction is not.
+CARD_THRESHOLD = 120
+CARD_WINDOW_SESSIONS = 756  # ~3 trading years, per Ch*** "1y enough, 2-3 to be precise"
+CHOP_LEGS, CHOP_SWING = 10, 450
+TREND_LEGS, TREND_SWING = 3, 300
+
+
+def _card_bucket(n_legs: int, last_swing_pts: float | None) -> str:
+    if last_swing_pts is not None:
+        if n_legs >= CHOP_LEGS and last_swing_pts >= CHOP_SWING:
+            return "STRONG-CHOP"
+        if 1 <= n_legs <= TREND_LEGS and last_swing_pts < TREND_SWING:
+            return "STRONG-TREND"
+    return "NEUTRAL"
+
+
+@st.cache_data
+def _morning_card_stats(_conn, instrument: str, latest_date: str) -> dict:
+    """Latest session's own stats + trailing-window conditional character
+    probabilities for the bucket it falls in. latest_date in the cache key
+    invalidates on DB refresh."""
+    rows = _conn.execute(
+        """SELECT s.date, s.shape, s.n_swings, s.n_legs, s.fade_pts,
+                  (SELECT w.size_pts FROM shape_swings w
+                   WHERE w.instrument = s.instrument AND w.date = s.date
+                     AND w.threshold = s.threshold
+                   ORDER BY w.swing_index DESC LIMIT 1) AS last_swing_pts,
+                  (SELECT w.direction FROM shape_swings w
+                   WHERE w.instrument = s.instrument AND w.date = s.date
+                     AND w.threshold = s.threshold
+                   ORDER BY w.swing_index DESC LIMIT 1) AS last_swing_dir
+           FROM session_shapes s
+           WHERE s.instrument = ? AND s.threshold = ? AND s.date <= ?
+           ORDER BY s.date DESC LIMIT ?""",
+        (instrument, CARD_THRESHOLD, latest_date, CARD_WINDOW_SESSIONS + 1),
+    ).fetchall()
+    rows = [dict(zip(
+        ("date", "shape", "n_swings", "n_legs", "fade_pts", "last_swing_pts", "last_swing_dir"), r
+    )) for r in rows]
+    rows.reverse()  # oldest -> newest
+    latest = rows[-1]
+
+    by_bucket: dict[str, list[int]] = {"STRONG-CHOP": [], "STRONG-TREND": [], "NEUTRAL": []}
+    all_swings = []
+    for prev, today in zip(rows, rows[1:]):
+        by_bucket[_card_bucket(prev["n_legs"], prev["last_swing_pts"])].append(today["n_swings"])
+        all_swings.append(today["n_swings"])
+
+    def stats(swing_counts):
+        n = len(swing_counts)
+        if n == 0:
+            return {"n": 0, "p_oneway": None, "p_multi": None, "avg_swings": None}
+        oneway = sum(1 for s in swing_counts if s == 1) / n
+        return {"n": n, "p_oneway": oneway, "p_multi": 1 - oneway,
+                "avg_swings": sum(swing_counts) / n}
+
+    bucket = _card_bucket(latest["n_legs"], latest["last_swing_pts"])
+    return {
+        "latest": latest,
+        "bucket": bucket,
+        "bucket_stats": stats(by_bucket[bucket]),
+        "base_stats": stats(all_swings),
+    }
+
+
+def render_morning_card(conn, instrument: str) -> None:
+    latest_date = conn.execute(
+        "SELECT MAX(date) FROM session_shapes WHERE instrument=? AND threshold=?",
+        (instrument, CARD_THRESHOLD),
+    ).fetchone()[0]
+    if latest_date is None:
+        return
+    card = _morning_card_stats(conn, instrument, latest_date)
+    latest, bucket = card["latest"], card["bucket"]
+    bs, base = card["bucket_stats"], card["base_stats"]
+
+    color = {"STRONG-CHOP": "#d9534f", "STRONG-TREND": "#5cb85c", "NEUTRAL": "#999999"}[bucket]
+    swing_txt = ("-" if latest["last_swing_pts"] is None
+                 else f"{latest['last_swing_pts']:.0f} pts {'up' if latest['last_swing_dir'] == 'U' else 'down'}")
+    fade_txt = "-" if latest["fade_pts"] is None else f"{latest['fade_pts']:+.0f} pts"
+    if bs["n"]:
+        forecast = (
+            f"P(one-way day): <b>{bs['p_oneway']*100:.0f}%</b> &nbsp;|&nbsp; "
+            f"P(2+ macro swings): <b>{bs['p_multi']*100:.0f}%</b> &nbsp;|&nbsp; "
+            f"avg macro swings: <b>{bs['avg_swings']:.2f}</b> "
+            f"<span style='opacity:0.6'>(n={bs['n']} similar days; "
+            f"base {base['p_oneway']*100:.0f}% / {base['p_multi']*100:.0f}% / "
+            f"{base['avg_swings']:.2f})</span>"
+        )
+    else:
+        forecast = "not enough similar days in window"
+    st.markdown(
+        f'<div style="border:1px solid {color}; border-left:6px solid {color}; '
+        'border-radius:6px; padding:0.6rem 1rem; margin:0.4rem 0 0.8rem 0; '
+        'font-size:0.85rem;">'
+        f'<b>Morning card</b> — last session {latest["date"]} (T={CARD_THRESHOLD}): '
+        f'shape <b>{latest["shape"]}</b>, {latest["n_legs"]} legs, '
+        f'last swing {swing_txt}, fade into close {fade_txt}<br>'
+        f'Next session regime: <b style="color:{color}">{bucket}</b> &nbsp;→&nbsp; {forecast}<br>'
+        '<span style="opacity:0.6">Character only — direction is NOT predictable from '
+        'prior-day info (validated out-of-sample). Rules: STRONG-CHOP = 10+ legs & last swing '
+        '≥450; STRONG-TREND = ≤3 legs & last swing <300.</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def main(standalone: bool = True) -> None:
     if standalone:
         st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
@@ -385,6 +497,8 @@ def main(standalone: bool = True) -> None:
         '<h2 style="font-size:1.4rem; font-weight:700; margin:0 0 0.4rem 0;">Gyrations v2.0</h2>',
         unsafe_allow_html=True,
     )
+
+    render_morning_card(conn, instrument)
 
     filters, lookahead_active = render_filters(
         conn, instrument, groups=["context", "rth_filters", "legs_filters_v2"]

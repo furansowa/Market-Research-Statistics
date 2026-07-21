@@ -129,6 +129,11 @@ def main() -> None:
     finally:
         conn.close()
 
+    # macro shape tables + sessions.shape_40/120/200 columns — derived from
+    # the gyrations table just written, so must run after it (own connection)
+    import run_shapes
+    run_shapes.main()
+
     print(f"Done in {time.time() - t0:.1f}s total")
 
 
