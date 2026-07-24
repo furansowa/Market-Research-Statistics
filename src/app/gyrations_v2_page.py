@@ -79,7 +79,8 @@ LEG_DETAIL_CONFIRMED_ONLY = True
 # (between HTvsLT and Range), then RelHigh/RelLow (after RelClose) — all
 # v2.0-only, kept off Day Session's table the same way.
 BASE_COLUMNS = [
-    "date", "weekday", "bs_sb", "shape_40", "shape_120", "shape_200",
+    "date", "weekday", "moon_age_days", "moon_phase", "bs_sb", "shape_40", "shape_120", "shape_200",
+    "pivot_pattern_40", "pivot_pattern_120", "pivot_pattern_200",
     "rth_high_time", "rth_low_time",
     "hl_time_diff", "hl_time_vs_prev", "h_time_prev_h_time", "l_time_prev_l_time", "ht_vs_lt",
     "bs_sb_legs_40", "first_legs_40", "last_legs_40",

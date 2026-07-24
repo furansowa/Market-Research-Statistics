@@ -151,7 +151,9 @@ def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec) -> tuple
         values = cached_distinct_values(conn, spec.name, instrument)
         if not values:
             return None, 0
-        if spec.value_order:
+        if spec.value_sort_key:
+            values = sorted(values, key=spec.value_sort_key)
+        elif spec.value_order:
             order = spec.value_order
             values = sorted(values, key=lambda v: order.index(v) if v in order else len(order))
     else:
@@ -164,7 +166,13 @@ def _render_one_filter(conn: sqlite3.Connection, instrument: str, spec) -> tuple
             val = st.slider(spec.label, lo, hi, (lo, hi), key=f"filt_{spec.name}")
             value = val if val != (lo, hi) else None
         elif spec.filter_kind == "select":
-            sel = st.multiselect(spec.label, values, default=[], key=f"filt_{spec.name}")
+            # format_func must always return a str -- passing one at all (even
+            # a no-op) disables Streamlit's own auto-stringification of the
+            # underlying option value.
+            fmt = (lambda v: spec.value_labels.get(v, str(v))) if spec.value_labels else str
+            sel = st.multiselect(
+                spec.label, values, default=[], key=f"filt_{spec.name}", format_func=fmt,
+            )
             value = sel if sel else None
         elif spec.filter_kind == "bool":
             choice = st.selectbox(spec.label, ["Any", "Yes", "No"], key=f"filt_{spec.name}")
@@ -209,6 +217,7 @@ _LEGS_ONLY_V2_FILTER_NAMES = {
     "bs_sb_legs_120", "first_legs_120", "last_legs_120",
     "bs_sb_legs_200", "first_legs_200", "last_legs_200",
     "shape_40", "shape_120", "shape_200",
+    "pivot_pattern_40", "pivot_pattern_120", "pivot_pattern_200",
 }
 
 
@@ -230,7 +239,7 @@ def _filter_group_key(spec) -> str:
         return "legs_filters"
     if spec.name in _LEGS_ONLY_V2_FILTER_NAMES:
         return "legs_filters_v2"
-    if spec.basis == "context" and spec.name in ("weekday", "is_half_day"):
+    if spec.basis == "context" and spec.name in ("weekday", "is_half_day", "moon_age_days", "moon_phase"):
         return "context"
     if spec.basis in ("context", "RTH"):
         return "rth_filters"
@@ -255,8 +264,8 @@ _FILTER_GROUP_ORDER = ["context", "rth_filters", "first_30m", "hour_10_11", "fir
 _ALL_FILTER_GROUPS = _FILTER_GROUP_ORDER + ["legs_filters", "legs_filters_v2"]
 
 # How many filters to lay out per row within each group's expander. "context"
-# is always exactly weekday + is_half_day, so 2 puts them on one line; every
-# other group packs 3 per row to cut down on scrolling.
+# holds weekday/is_half_day/moon_age_days/moon_phase -- 2 per row groups them
+# into two neat rows; every other group packs 3 per row to cut down on scrolling.
 _FILTER_GROUP_COLS = {"context": 2}
 _DEFAULT_FILTER_COLS = 3
 
@@ -580,8 +589,11 @@ def build_display_table(
             enum_cols[col_label] = spec.color_map
 
         alignment = "left" if spec.name == "weekday" else ("right" if spec.dtype == "time" or spec.color_kind == "enum" else None)
+        width = _content_column_width(values, spec.decimals)
+        if spec.max_col_width is not None:
+            width = min(width, spec.max_col_width)
         column_config[col_label] = st.column_config.Column(
-            col_label, width=_content_column_width(values, spec.decimals), help=spec.label, alignment=alignment,
+            col_label, width=width, help=spec.label, alignment=alignment,
         )
 
     for extra in extra_columns or []:

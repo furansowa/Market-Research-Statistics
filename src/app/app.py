@@ -1,10 +1,11 @@
-"""Multipage app entry point — Day Session + Gyration Legs + Gyrations v2.0.
+"""Multipage app entry point — Day Session + Gyration Legs + Gyrations v2.0 +
+OpenNormalisation v1.0.
 
 Run with: .venv/Scripts/streamlit.exe run src/app/app.py
 
 Uses function-reference st.Page (not path-string) deliberately: `dashboard`/
-`legs_page`/`gyrations_v2_page` are imported once, by plain top-level name,
-exactly the same way `legs_page.py`/`gyrations_v2_page.py` themselves import
+`legs_page`/`gyrations_v2_page`/`open_normalization_page` are imported once, by
+plain top-level name, exactly the same way each page module itself imports
 `dashboard` (`from dashboard import ...`) -- keeping every page's functions
 under one consistent module identity so st.cache_resource's cache key (keyed
 on func.__module__) doesn't fragment into independently-cached DB
@@ -17,6 +18,7 @@ import streamlit as st
 import dashboard
 import legs_page
 import gyrations_v2_page
+import open_normalization_page
 
 st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
 
@@ -24,5 +26,6 @@ pg = st.navigation([
     st.Page(lambda: dashboard.main(standalone=False), title="Day Session", url_path="day-session"),
     st.Page(lambda: legs_page.main(standalone=False), title="Gyration Legs", url_path="gyration-legs"),
     st.Page(lambda: gyrations_v2_page.main(standalone=False), title="Gyrations v2.0", url_path="gyrations-v2"),
+    st.Page(lambda: open_normalization_page.main(standalone=False), title="OpenNormalisation v1.0", url_path="open-normalisation"),
 ])
 pg.run()

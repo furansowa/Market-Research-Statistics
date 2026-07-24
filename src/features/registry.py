@@ -37,6 +37,7 @@ None) — before any pandas conversion happens in dashboard.py.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Callable, Literal, Optional
 
 import polars as pl
@@ -65,6 +66,13 @@ _SHAPE_ORDER = ["/", "\\", "V", "A", "N", "\\/\\", "M", "W",
                 "M+1", "W+1", "M+2", "W+2", "M+3", "W+3", "flat"]
 
 
+def _pivot_pattern_sort_key(v: str) -> tuple:
+    """PivotPattern dropdown order (user spec): grouped by digit-count
+    ascending, then within a length ranked by descending binary value --
+    1,0 | 11,10,01,00 | 111,110,101,100,011,010,001,000 | ..."""
+    return (len(v), -int(v, 2))
+
+
 @dataclass(frozen=True)
 class FeatureSpec:
     name: str
@@ -81,8 +89,12 @@ class FeatureSpec:
     color_map: Optional[dict] = field(default=None)
     table_label: Optional[str] = None  # short header for the results grid; falls back to `label`
     value_order: Optional[list] = None  # explicit option order for "select" filters; falls back to alphabetical
+    value_labels: Optional[dict] = None  # raw stored value -> full display text in the filter dropdown only
+    value_sort_key: Optional[Callable[[Any], Any]] = None  # computed sort key, for domains too large/unbounded
+    # for an explicit `value_order` list (e.g. variable-length pattern strings); takes precedence over value_order.
     window: Optional[str] = None  # None = the whole-RTH "Day Session" tab; else the window tab this belongs to
     shared_across_tabs: bool = False  # True = appears in every tab regardless of `window` (date, weekday, ...)
+    max_col_width: Optional[int] = None  # caps the auto-sized results-grid column width (px); forces truncation
 
     @property
     def display_label(self) -> str:
@@ -156,6 +168,44 @@ def _hhmm(v):
     return v[11:16] if isinstance(v, str) and len(v) >= 16 else v
 
 
+# Lunar phase (pure astronomical calendar arithmetic -- no external data or
+# network dependency, and knowable arbitrarily far in advance, so always
+# timing="pre_open" regardless of offset). Reference epoch: the New Moon
+# instant of 2000-01-06 18:14 UTC, a standard fixed point for this kind of
+# approximation. Evaluated at midnight of each session's calendar `date` --
+# the few-hour gap to the actual RTH open is immaterial at this resolution.
+_SYNODIC_MONTH = 29.530588853  # mean days from new moon to new moon
+_MOON_EPOCH = date(2000, 1, 6)
+_MOON_EPOCH_FRAC_DAY = (18 * 60 + 14) / 1440  # fraction of that calendar day already elapsed at 18:14 UTC
+
+_MOON_PHASE_ORDER = ["NM", "WxC", "FQ", "WxG", "FM", "WnG", "LQ", "WnC"]
+_MOON_PHASE_LABELS = {
+    "NM": "New Moon", "WxC": "Waxing Crescent", "FQ": "First Quarter", "WxG": "Waxing Gibbous",
+    "FM": "Full Moon", "WnG": "Waning Gibbous", "LQ": "Last Quarter", "WnC": "Waning Crescent",
+}
+
+
+def _moon_age_expr() -> pl.Expr:
+    """Days since the most recent new moon, 0 <= age < 29.53 (continuous,
+    monotonic within a cycle -- unlike illumination fraction, this
+    distinguishes waxing from waning at the same amount of light)."""
+    days_since_epoch = (pl.col("date") - pl.lit(_MOON_EPOCH)).dt.total_days().cast(pl.Float64)
+    return (days_since_epoch - _MOON_EPOCH_FRAC_DAY) % _SYNODIC_MONTH
+
+
+def _moon_phase_expr() -> pl.Expr:
+    """8-way phase label from moon_age -- equal ~3.69-day slices, centered so
+    New Moon (age wraps around 0) and Full Moon (age ~= 14.77) sit in the
+    middle of their own slice rather than at a boundary."""
+    age = _moon_age_expr()
+    width = _SYNODIC_MONTH / 8
+    idx = ((age + width / 2) / width).floor().cast(pl.Int64) % 8
+    expr = pl.lit(_MOON_PHASE_ORDER[0])
+    for i, code in enumerate(_MOON_PHASE_ORDER):
+        expr = pl.when(idx == i).then(pl.lit(code)).otherwise(expr)
+    return expr
+
+
 REGISTRY: list[FeatureSpec] = [
     # ---- identity / calendar ----
     FeatureSpec(
@@ -174,6 +224,19 @@ REGISTRY: list[FeatureSpec] = [
     FeatureSpec(
         "is_half_day", "boolean", "context", "bool", "Half day",
         timing="pre_open", show_in_table=True, table_label="Half Day", shared_across_tabs=True,
+    ),
+    FeatureSpec(
+        "moon_age_days", "numeric", "context", "range", "Moon age (days since new moon)",
+        compute=lambda df: _moon_age_expr(),
+        timing="pre_open", show_in_table=True, table_label="MoonAge", decimals=1,
+        shared_across_tabs=True,
+    ),
+    FeatureSpec(
+        "moon_phase", "categorical", "context", "select", "Moon phase",
+        compute=lambda df: _moon_phase_expr(),
+        timing="pre_open", show_in_table=True, table_label="Moon",
+        value_order=_MOON_PHASE_ORDER, value_labels=_MOON_PHASE_LABELS,
+        shared_across_tabs=True,
     ),
     FeatureSpec(
         "seq", "numeric", "context", None, "Seq",
@@ -575,6 +638,30 @@ REGISTRY: list[FeatureSpec] = [
         "shape_200", "categorical", "RTH", "select", "Day shape (T=200, extreme)",
         timing="outcome", show_in_table=False, table_label="Shape200",
         value_order=_SHAPE_ORDER,
+    ),
+
+    # ---- Gyrations v2.0 page: pivot patterns ----
+    # Persisted into sessions by run_shapes.py alongside the shapes above, but
+    # a distinct, simpler concept: one '1'/'0' digit per CONFIRMED leg (not
+    # the shape's merged macro swings) -- '1' if that leg's own end price is
+    # >= the session's RTH open, else '0'. E.g. 4 legs ending at +30/-95/+150/
+    # +20 relative to open -> "1011". NULL on a "flat" (zero-leg) session.
+    # max_col_width caps the results-grid column at ~10 visible characters;
+    # longer patterns are visually clipped by the grid, full value on hover.
+    FeatureSpec(
+        "pivot_pattern_40", "categorical", "RTH", "select", "Pivot pattern (T=40, extreme)",
+        timing="outcome", show_in_table=False, table_label="PivotPattern40",
+        value_sort_key=_pivot_pattern_sort_key, max_col_width=104,
+    ),
+    FeatureSpec(
+        "pivot_pattern_120", "categorical", "RTH", "select", "Pivot pattern (T=120, extreme)",
+        timing="outcome", show_in_table=False, table_label="PivotPattern120",
+        value_sort_key=_pivot_pattern_sort_key, max_col_width=104,
+    ),
+    FeatureSpec(
+        "pivot_pattern_200", "categorical", "RTH", "select", "Pivot pattern (T=200, extreme)",
+        timing="outcome", show_in_table=False, table_label="PivotPattern200",
+        value_sort_key=_pivot_pattern_sort_key, max_col_width=104,
     ),
 
     # ---- context / cross-session (previous-session shifts) ----

@@ -9,6 +9,14 @@ and writes two tables to data/db/lookup.sqlite:
 - shape_swings: one row per macro swing — the yellow-line segments: start/end
   ts+price, size in points, duration in minutes.
 
+Also derives PivotPattern (a distinct, simpler concept from the macro shape
+above -- every CONFIRMED leg's own endpoint, not the shape's merged macro
+swings): one '1'/'0' digit per confirmed leg, in order, '1' if that leg's end
+price is >= the session's RTH open else '0'. E.g. 4 legs ending at +30, -95,
++150, +20 relative to open -> "1011". Persisted straight onto `sessions` as
+pivot_pattern_40/120/200 (no separate backing table -- it's simple enough to
+carry as a plain per-session string, unlike the macro-shape swing geometry).
+
 Usage: .venv/Scripts/python.exe run_shapes.py
 """
 
@@ -76,12 +84,13 @@ def main() -> None:
 
     instruments = [r["instrument"] for r in cur.execute("SELECT DISTINCT instrument FROM sessions")]
     n_shape_rows = n_swing_rows = 0
+    pivot_pattern_updates: dict[float, list[tuple]] = {t: [] for t in THRESHOLDS}
 
     for instrument in instruments:
         sessions = {
             r["date"]: dict(r)
             for r in conn.execute(
-                "SELECT date, rth_close FROM sessions WHERE instrument=? ORDER BY date",
+                "SELECT date, rth_open, rth_close FROM sessions WHERE instrument=? ORDER BY date",
                 (instrument,),
             )
         }
@@ -98,7 +107,8 @@ def main() -> None:
             shape_rows = []
             swing_rows = []
             for date, sess in sessions.items():
-                res = classify_session(legs_by_date.get(date, []))
+                day_legs = legs_by_date.get(date, [])
+                res = classify_session(day_legs)
                 pivots = res["pivots"]
                 fade = last_ts = None
                 if pivots:
@@ -117,6 +127,12 @@ def main() -> None:
                         _minutes_between(p_ts, ts),
                     ))
                     prev = (ts, price, side)
+
+                if day_legs and sess["rth_open"] is not None:
+                    pattern = "".join(
+                        "1" if leg["end_price"] >= sess["rth_open"] else "0" for leg in day_legs
+                    )
+                    pivot_pattern_updates[threshold].append((pattern, instrument, date))
 
             cur.executemany(
                 "INSERT INTO session_shapes VALUES (?,?,?,?,?,?,?,?,?)", shape_rows
@@ -143,10 +159,28 @@ def main() -> None:
             (threshold,),
         )
 
+    # persist PivotPattern per threshold -- no separate backing table, so the
+    # rows collected above are pushed straight onto `sessions` here.
+    n_pivot_rows = 0
+    for threshold in THRESHOLDS:
+        col = f"pivot_pattern_{int(threshold)}"
+        try:
+            cur.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists (rerun without ETL rebuild)
+        # Reset to NULL first so a rerun can't leave a stale pattern behind on
+        # a date that no longer has any confirmed legs at this threshold.
+        cur.execute(f"UPDATE sessions SET {col} = NULL")
+        rows = pivot_pattern_updates[threshold]
+        cur.executemany(
+            f"UPDATE sessions SET {col} = ? WHERE instrument = ? AND date = ?", rows
+        )
+        n_pivot_rows += len(rows)
+
     conn.commit()
     conn.close()
-    print(f"done: {n_shape_rows} session_shapes rows, {n_swing_rows} shape_swings rows "
-          f"in {time.time() - t0:.1f}s")
+    print(f"done: {n_shape_rows} session_shapes rows, {n_swing_rows} shape_swings rows, "
+          f"{n_pivot_rows} pivot_pattern updates in {time.time() - t0:.1f}s")
 
 
 if __name__ == "__main__":

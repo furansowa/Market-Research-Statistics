@@ -53,7 +53,7 @@ RHLW_MIN_THRESHOLD = 30
 # the 5 new HLtime/HTvsLT metrics (deliberately show_in_table=False in
 # registry.py so they never appear on Day Session's default table).
 BASE_COLUMNS = [
-    "date", "weekday", "bs_sb", "rth_high_time", "rth_low_time",
+    "date", "weekday", "moon_age_days", "moon_phase", "bs_sb", "rth_high_time", "rth_low_time",
     "hl_time_diff", "hl_time_vs_prev", "h_time_prev_h_time", "l_time_prev_l_time", "ht_vs_lt",
     "rth_range", "rth_range_ma20", "range_vs_ma20_pts", "gap_pts", "rel_close_pts", "abs_close_pts",
 ]
