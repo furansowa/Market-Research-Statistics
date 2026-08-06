@@ -39,6 +39,8 @@ precompute = [
   { scope = "rth", mode = "close_to_close" },
   { scope = "eth", mode = "close_to_close" },
   { scope = "rth", mode = "extreme_to_extreme" },
+  { scope = "continuous", mode = "close_to_close" },
+  { scope = "continuous", mode = "extreme_to_extreme" },
 ]
 
 # Only consulted when mode = "extreme_to_extreme". See spec §2.2.

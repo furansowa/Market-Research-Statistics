@@ -19,6 +19,7 @@ import dashboard
 import legs_page
 import gyrations_v2_page
 import open_normalization_page
+import gyr_waves_page
 
 st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
 
@@ -27,5 +28,6 @@ pg = st.navigation([
     st.Page(lambda: legs_page.main(standalone=False), title="Gyration Legs", url_path="gyration-legs"),
     st.Page(lambda: gyrations_v2_page.main(standalone=False), title="Gyrations v2.0", url_path="gyrations-v2"),
     st.Page(lambda: open_normalization_page.main(standalone=False), title="OpenNormalisation v1.0", url_path="open-normalisation"),
+    st.Page(lambda: gyr_waves_page.main(standalone=False), title="Gyrational Waves v1.0", url_path="gyrational-waves"),
 ])
 pg.run()

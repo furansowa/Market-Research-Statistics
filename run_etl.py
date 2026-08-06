@@ -134,6 +134,10 @@ def main() -> None:
     import run_shapes
     run_shapes.main()
 
+    # POC/Value Area columns — only needs minutes+sessions (own connection)
+    import run_market_profile
+    run_market_profile.main()
+
     print(f"Done in {time.time() - t0:.1f}s total")
 
 

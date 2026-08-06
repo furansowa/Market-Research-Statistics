@@ -66,6 +66,12 @@ _SHAPE_ORDER = ["/", "\\", "V", "A", "N", "\\/\\", "M", "W",
                 "M+1", "W+1", "M+2", "W+2", "M+3", "W+3", "flat"]
 
 
+# va_prev_va's 6 symbolic codes (not magnitudes -- see
+# gyrations/market_profile.py's classify_va_relationship), in the order the
+# user introduced them.
+_VA_PREV_VA_ORDER = ["1", "-1", "0", "11", "-11", "111"]
+
+
 def _pivot_pattern_sort_key(v: str) -> tuple:
     """PivotPattern dropdown order (user spec): grouped by digit-count
     ascending, then within a length ranked by descending binary value --
@@ -440,6 +446,45 @@ REGISTRY: list[FeatureSpec] = [
         compute=lambda df: _dir3("gap_pts"),
         timing="pre_open", show_in_table=False,
     ),
+
+    # ---- weekly close-difference derived (2026-08-02) ----
+    # ISO (year, week) id -- internal only, not shown/filterable -- used to
+    # group sessions into calendar weeks regardless of holidays/half-weeks.
+    FeatureSpec(
+        "wk_id", "numeric", "context", None, "Week ID (internal)",
+        compute=lambda df: pl.col("date").dt.iso_year() * 100 + pl.col("date").dt.week(),
+        timing="pre_open", show_in_table=False,
+    ),
+    FeatureSpec(
+        "abs_wk_close", "numeric", "RTH", "range", "AbsWkClose",
+        # Previous week's last close: at each week's first row, take the prior
+        # row's close (the last actual trading day before this week, whatever
+        # weekday that fell on), then forward-fill it through the rest of the
+        # week so every session in the week carries the same reference value.
+        compute=lambda df: pl.col("rth_close") - (
+            pl.when(pl.col("wk_id") != pl.col("wk_id").shift(1))
+            .then(pl.col("rth_close").shift(1))
+            .otherwise(None)
+            .forward_fill()
+        ),
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="AbsWkClose",
+    ),
+    FeatureSpec(
+        "abs_wk_close_dir", "categorical", "RTH", "select", "AbsWkClose direction",
+        compute=lambda df: _dir3("abs_wk_close"),
+        timing="outcome", show_in_table=False,
+    ),
+    FeatureSpec(
+        "rel_wk_close", "numeric", "RTH", "range", "RelWkClose",
+        compute=lambda df: pl.col("rth_close") - pl.col("rth_open").first().over("wk_id"),
+        timing="outcome", show_in_table=True, decimals=1, color_kind="pts", table_label="RelWkClose",
+    ),
+    FeatureSpec(
+        "rel_wk_close_dir", "categorical", "RTH", "select", "RelWkClose direction",
+        compute=lambda df: _dir3("rel_wk_close"),
+        timing="outcome", show_in_table=False,
+    ),
+
     FeatureSpec(
         "rel_close_pts", "numeric", "RTH", "range", "Rel. close (close-open, pts)",
         compute=lambda df: pl.col("rth_close") - pl.col("rth_open"),
@@ -664,6 +709,68 @@ REGISTRY: list[FeatureSpec] = [
         value_sort_key=_pivot_pattern_sort_key, max_col_width=104,
     ),
 
+    # ---- Point of Control / Value Area ----
+    # Persisted by run_market_profile.py from the full session's 1-min RTH
+    # closes (src/gyrations/market_profile.py -- real time-at-price POC/VA
+    # expansion, not the ProRealTime script's fixed-%-of-range approximation
+    # it was modeled on). basis="RTH", not v2-only-routed -- these fall
+    # through _filter_group_key's default branch into "rth_filters", so they
+    # appear on Day Session/Gyration Legs/Gyrations v2.0 like gap_pts does.
+    # The -1/0/1 "vs value area" columns reuse color_kind="pts" coloring
+    # (above=positive=green, below=negative=red, inside=neutral) since the
+    # stored value already IS a sign.
+    FeatureSpec(
+        "poc", "numeric", "RTH", "range", "Point of Control (RTH)",
+        timing="outcome", show_in_table=False, decimals=1, table_label="POC",
+    ),
+    FeatureSpec(
+        "va70_hi", "numeric", "RTH", "range", "Value Area High (70%, RTH)",
+        timing="outcome", show_in_table=False, decimals=1, table_label="VA70Hi",
+    ),
+    FeatureSpec(
+        "va70_lo", "numeric", "RTH", "range", "Value Area Low (70%, RTH)",
+        timing="outcome", show_in_table=False, decimals=1, table_label="VA70Lo",
+    ),
+    FeatureSpec(
+        "o_prev_poc", "numeric", "RTH", "range", "Open minus previous day's POC",
+        timing="pre_open", show_in_table=False, decimals=1, color_kind="pts", table_label="OPrevPOC",
+    ),
+    FeatureSpec(
+        "o_prev_va", "numeric", "RTH", "select", "Open vs previous day's Value Area",
+        timing="pre_open", show_in_table=False, decimals=0, color_kind="pts", table_label="OPrevVA",
+    ),
+    FeatureSpec(
+        "h_prev_va", "numeric", "RTH", "select", "RTH High vs previous day's Value Area",
+        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="HPrevVA",
+    ),
+    FeatureSpec(
+        "l_prev_va", "numeric", "RTH", "select", "RTH Low vs previous day's Value Area",
+        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="LPrevVA",
+    ),
+    FeatureSpec(
+        "cl_poc", "numeric", "RTH", "range", "Close minus today's own POC",
+        timing="outcome", show_in_table=False, decimals=1, color_kind="pts", table_label="ClPOC",
+    ),
+    FeatureSpec(
+        "cl_va", "numeric", "RTH", "select", "Close vs today's own Value Area",
+        timing="outcome", show_in_table=False, decimals=0, color_kind="pts", table_label="ClVA",
+    ),
+    FeatureSpec(
+        "va_range", "numeric", "RTH", "range", "Value Area width (VA70Hi - VA70Lo)",
+        timing="outcome", show_in_table=False, decimals=1, table_label="VArange",
+    ),
+    FeatureSpec(
+        "va_range_diff", "numeric", "RTH", "range", "Value Area width vs previous day's",
+        timing="outcome", show_in_table=False, decimals=1, color_kind="pts", table_label="VArangeDiff",
+    ),
+    FeatureSpec(
+        "va_prev_va", "categorical", "RTH", "select",
+        "Today's Value Area vs previous day's (1/-1 shifted-overlap, 0 contained, "
+        "11/-11 shifted-no-overlap, 111 engulfs)",
+        timing="outcome", show_in_table=False, table_label="VAPrevVA",
+        value_order=_VA_PREV_VA_ORDER,
+    ),
+
     # ---- context / cross-session (previous-session shifts) ----
     # All pre_open: by the time today's session opens, the previous session is
     # fully closed history, regardless of the underlying column's own timing.
@@ -701,6 +808,26 @@ REGISTRY: list[FeatureSpec] = [
         "prev_abs_range_diff_pts", "numeric", "context", "range", "Prev. Abs. Range diff (pts)",
         compute=lambda df: pl.col("abs_range_diff_pts").shift(1),
         timing="pre_open", decimals=1,
+    ),
+    FeatureSpec(
+        "prev_abs_wk_close", "numeric", "context", "range", "Prev. AbsWkClose",
+        compute=lambda df: pl.col("abs_wk_close").shift(1),
+        timing="pre_open", decimals=1,
+    ),
+    FeatureSpec(
+        "prev_abs_wk_close_dir", "categorical", "context", "select", "Prev. AbsWkClose direction",
+        compute=lambda df: pl.col("abs_wk_close_dir").shift(1),
+        timing="pre_open",
+    ),
+    FeatureSpec(
+        "prev_rel_wk_close", "numeric", "context", "range", "Prev. RelWkClose",
+        compute=lambda df: pl.col("rel_wk_close").shift(1),
+        timing="pre_open", decimals=1,
+    ),
+    FeatureSpec(
+        "prev_rel_wk_close_dir", "categorical", "context", "select", "Prev. RelWkClose direction",
+        compute=lambda df: pl.col("rel_wk_close_dir").shift(1),
+        timing="pre_open",
     ),
     FeatureSpec(
         "gap_prevclose_combo", "categorical", "context", "select", "Gap x prev-close combo",

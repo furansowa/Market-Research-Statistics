@@ -7,9 +7,12 @@ __pycache__/
 # Virtual environment
 .venv/
 
-# Built database — regenerated from the raw CSVs via `python run_etl.py`
-# (~1.5GB, far past what should ever go into git)
-data/db/
+# Generated/local data — regenerated from the raw CSVs via `python run_etl.py`
+# (db is several GB, far past what should ever go into git)
+data/
+
+# Local reference material (e.g. copyrighted PDFs) — not project source
+doc/
 
 # Local Claude Code settings (machine-specific tool permissions, not shared config)
 .claude/settings.local.json
