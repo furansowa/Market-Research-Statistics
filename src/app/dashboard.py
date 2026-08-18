@@ -869,7 +869,7 @@ def render_gyration_controls(gyr_config: dict, *, fixed_mode: str | None = None)
 
 def main(standalone: bool = True) -> None:
     if standalone:
-        st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
+        st.set_page_config(page_title="Market Statistics Research v2.0", layout="wide")
     inject_shared_css()
     conn = get_connection()
 

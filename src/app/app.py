@@ -20,8 +20,14 @@ import legs_page
 import gyrations_v2_page
 import open_normalization_page
 import gyr_waves_page
+import gyr_time_page
+import range_page
+import day_templates_page
+import hour_composite_page
+import gyr_stats_page
+import time_waves_page
 
-st.set_page_config(page_title="DOW Session Lookup Engine", layout="wide")
+st.set_page_config(page_title="Market Statistics Research v2.0", layout="wide")
 
 pg = st.navigation([
     st.Page(lambda: dashboard.main(standalone=False), title="Day Session", url_path="day-session"),
@@ -29,5 +35,11 @@ pg = st.navigation([
     st.Page(lambda: gyrations_v2_page.main(standalone=False), title="Gyrations v2.0", url_path="gyrations-v2"),
     st.Page(lambda: open_normalization_page.main(standalone=False), title="OpenNormalisation v1.0", url_path="open-normalisation"),
     st.Page(lambda: gyr_waves_page.main(standalone=False), title="Gyrational Waves v1.0", url_path="gyrational-waves"),
+    st.Page(lambda: gyr_time_page.main(standalone=False), title="Gyrational Time v1.0", url_path="gyrational-time"),
+    st.Page(lambda: range_page.main(standalone=False), title="Gyrational Range v1.0", url_path="gyrational-range"),
+    st.Page(lambda: day_templates_page.main(standalone=False), title="Day Templates v1.0", url_path="day-templates"),
+    st.Page(lambda: hour_composite_page.main(standalone=False), title="Hourly Composite v1.0", url_path="hourly-composite"),
+    st.Page(lambda: gyr_stats_page.main(standalone=False), title="Gyrational Stats v1.0", url_path="gyrational-stats"),
+    st.Page(lambda: time_waves_page.main(standalone=False), title="Time Waves v1.0", url_path="time-waves"),
 ])
 pg.run()
