@@ -1,18 +1,22 @@
-# Code Structure & Features — DOW Session Lookup Engine
+# Code Structure & Features — Market Statistics Research v2.0
 
 Single reference document: what the codebase does, how the pieces connect, and
-every feature/column/filter exposed by each of the app's 5 pages. Written so
+every feature/column/filter exposed by each of the app's 11 pages. Written so
 that if this project needs to be reconstructed or debugged from scratch one
 day, everything needed is in this one file rather than scattered across
 session memory.
 
-This supersedes `CODE_STRUCTURE.md` and `Gyrations_v2_summary.md` (both
-predate several pages and are stale — see their own files for historical
-Phase 1/2 build notes if needed, but treat this file as authoritative for
-current state). The two SPEC files (`Gyrations_lookup_engine_SPEC.md`,
+The two SPEC files (`Gyrations_lookup_engine_SPEC.md`,
 `Gyrations_lookup_engine_SPEC_phase2.md`) remain useful as *design intent*
 documents — read them for the "why" behind early decisions — but they are not
 kept in sync with what's actually built; this file is.
+
+> **PART 2 coverage status.** Part 1 (architecture, file tree, database,
+> shared modules) is current. Part 2 documents pages 1-5 in full; pages 6-11
+> (Gyrational Time, Gyrational Range, Day Templates, Hourly Composite,
+> Gyrational Stats, Time Waves) are **not yet written up here** — their module
+> docstrings are the reference for now and are unusually detailed, including
+> the known-limitation notes that matter for interpreting their output.
 
 Each page's feature list below is **fully self-contained** — a column or
 concept that's shared across pages (e.g. "BS/SB", "Gap", the gyration
@@ -30,10 +34,10 @@ read in isolation.
 Raw per-instrument minute-bar CSVs (external, not in repo)
         │
         ▼
-   ETL pipeline (run_etl.py + a few standalone run_*.py post-steps)
+   ETL pipeline (run_etl.py + several standalone run_*.py precompute steps)
         │
         ▼
-   data/db/lookup.sqlite  (5 tables — see "Database" below)
+   data/db/lookup.sqlite  (10 tables — see "Database" below)
         │
         ▼
    src/features/registry.py   <- the single source of truth for every
@@ -43,7 +47,7 @@ Raw per-instrument minute-bar CSVs (external, not in repo)
    src/query/*.py   <- turns registry metadata + user filter state into SQL
         │
         ▼
-   src/app/*.py     <- 5 Streamlit pages (app.py wires them into one
+   src/app/*.py     <- 11 Streamlit pages (app.py wires them into one
                         multipage app), all reading the same DB/connection
 ```
 
@@ -63,14 +67,20 @@ session, one column per fact" majority of the data.
 Gyrations_app/
 ├── config.toml                     # session/gap/windows/gyrations/net_points/data settings
 ├── run_etl.py                      # main ETL entry point (raw CSVs -> minutes+sessions+gyrations)
-├── run_shapes.py                   # post-ETL: macro shape + pivot-pattern columns
-├── run_market_profile.py           # post-ETL: POC/Value Area columns
+├── run_shapes.py                   # post-ETL: macro shape + pivot-pattern columns (called by run_etl)
+├── run_market_profile.py           # post-ETL: POC/Value Area columns (called by run_etl)
 ├── run_gyrations_continuous.py     # incremental: adds `continuous`-scope gyrations without a full rebuild
+├── run_dax_minutes.py              # ingests DAX 1-min into `minutes` (per-instrument RTH tagging)
+├── run_bars.py                     # `bars`: clock-aligned 5/10/15/30/60/240-min OHLC
+├── run_hour_bars.py                # `session_hour_bars`: RTH-open-ANCHORED hourly bars
+├── run_range_bars.py               # `range_bars`: Renko-style fixed-increment bricks
+├── run_range_state.py              # `range_state`: multi-timeframe trailing/forward ranges
+├── run_day_templates.py            # `day_profiles`: normalised per-day RTH shape profiles
 ├── requirements.txt
 ├── .streamlit/config.toml          # Streamlit theme (dark base + pastel-blue accent)
 ├── .claude/launch.json             # dev-server launch config for the Preview tool
 ├── data/
-│   └── db/lookup.sqlite            # generated store — 5 tables, see "Database" below
+│   └── db/lookup.sqlite            # generated store — 10 tables, see "Database" below
 ├── img/
 │   └── MW_patterns/                # M1-M16.png, W1-W16.png — Merrill pattern diagrams
 ├── src/
@@ -84,25 +94,44 @@ Gyrations_app/
 │   │   ├── registry.py             # FeatureSpec registry — THE extensibility point (see below)
 │   │   └── definitions.py          # time-of-day helper expressions used by sessions.py
 │   ├── gyrations/
-│   │   ├── detect.py               # pure zigzag leg detector — no Polars/SQLite/timestamp deps
+│   │   ├── detect.py               # pure zigzag leg detector (point threshold) — no Polars/SQLite deps
+│   │   ├── time_waves.py           # TIME-based leg detector (bar count) — port of a ProRealTime indicator
 │   │   ├── shapes.py                # macro shape classifier (running-HOD/LOD templates)
+│   │   ├── day_templates.py        # scale-invariant day-profile builder + template classifier
+│   │   ├── gyr_stats.py            # 123 / F231 retracement-zone statistics (causal trend filter)
+│   │   ├── range_bars.py           # Renko-style range-bar construction
+│   │   ├── range_state.py          # multi-timeframe range state + causal quantile bucketing
+│   │   ├── time_patterns.py        # time-of-day pattern helpers (Gyrational Time page)
 │   │   ├── market_profile.py       # POC / Value Area (time-at-price) algorithm
 │   │   ├── merrill.py              # Arthur Merrill M/W 4-leg pattern classification
 │   │   └── rainflow.py             # rainflow cycle counting — standalone research module, NOT wired
 │   │                                # into any page/ETL step yet (see "Unwired research modules")
 │   ├── indicators/
+│   │   ├── ma.py                   # pure EMA / DEMA (Mulloy) implementations
 │   │   └── sowa_donchian.py        # SowaDonchian indicator, ported from a sibling repo
 │   ├── query/
 │   │   ├── filters.py              # registry -> offset-aware SQL joins + WHERE clauses (session-level)
 │   │   ├── legs.py                 # per-leg aggregate queries (Gyration Legs / Gyrations v2.0 pages)
-│   │   └── gyr_waves.py            # full-history leg + session queries (Gyrational Waves page)
+│   │   ├── gyr_waves.py            # full-history leg + session queries (Gyrational Waves page)
+│   │   ├── bars.py                 # `bars` table queries (higher-timeframe OHLC)
+│   │   ├── hour_bars.py            # `session_hour_bars` queries (Hourly Composite)
+│   │   ├── range_state.py          # `range_state` queries (Gyrational Range)
+│   │   ├── day_templates.py        # `day_profiles` queries (Day Templates)
+│   │   ├── gyr_stats.py            # ETH bars + RTH session ranges (Gyrational Stats)
+│   │   └── time_waves.py           # minute-bar loading, instrument-agnostic (Time Waves)
 │   └── app/
-│       ├── app.py                  # multipage entry point — wires all 5 pages together
+│       ├── app.py                  # multipage entry point — wires all 11 pages together
 │       ├── dashboard.py            # Day Session page + shared helpers used by every other page
 │       ├── legs_page.py            # Gyration Legs page
 │       ├── gyrations_v2_page.py    # Gyrations v2.0 page
 │       ├── open_normalization_page.py  # OpenNormalisation v1.0 page
-│       └── gyr_waves_page.py       # Gyrational Waves v1.0 page
+│       ├── gyr_waves_page.py       # Gyrational Waves v1.0 page
+│       ├── gyr_time_page.py        # Gyrational Time v1.0 page
+│       ├── range_page.py           # Gyrational Range v1.0 page
+│       ├── day_templates_page.py   # Day Templates v1.0 page
+│       ├── hour_composite_page.py  # Hourly Composite v1.0 page
+│       ├── gyr_stats_page.py       # Gyrational Stats v1.0 page
+│       └── time_waves_page.py      # Time Waves v1.0 page
 ├── tests/
 │   ├── conftest.py                 # session-scoped sqlite3 connection fixture to the built DB
 │   ├── test_sessions.py            # acceptance tests: invariants over the built `sessions` table
@@ -114,22 +143,29 @@ Gyrations_app/
 │   ├── test_shapes.py              # macro shape classifier tests
 │   ├── test_legs.py                # per-leg query module tests
 │   ├── test_market_profile.py      # POC/Value Area algorithm tests
+│   ├── test_time_waves.py          # time-based detector: hand-traced state machine + pinned known behaviour
 │   └── test_rainflow.py            # rainflow module tests (module itself is unwired — see above)
+├── README.md                                # setup, raw-data format, build order
 ├── Gyrations_lookup_engine_SPEC.md          # original design spec, all phases (historical)
-├── Gyrations_lookup_engine_SPEC_phase2.md   # Phase 2 spec: gyrations, windows, offset lookup (historical)
-├── CODE_STRUCTURE.md               # STALE — superseded by this file, kept until removal
-└── Gyrations_v2_summary.md         # STALE — superseded by this file, kept until removal
+└── Gyrations_lookup_engine_SPEC_phase2.md   # Phase 2 spec: gyrations, windows, offset lookup (historical)
 ```
 
-Raw CSVs are **not** copied into the repo — `config.toml`'s `[data].raw_dir`
-points directly at an external data folder
-(`D:/Trading/Research-Project-2026-07/2026 - Instruments Data (2008-2026)/DOW-Data`)
-to avoid duplicating hundreds of MB. Currently only US30 (DOW) is configured;
-DAX raw CSVs exist in a sibling folder (`.../DAX-Data`) but are **not yet**
-wired into `config.toml`/the ETL — adding DAX requires (a) a second raw
-directory to parse, and (b) a decision on DAX's own RTH window (its real
-session is the Xetra cash hours, ~03:00–11:30 ET, not US30's 09:30–16:00 —
-the app currently has one global RTH window, not a per-instrument one).
+Raw CSVs are **not** copied into the repo, and neither is the built database —
+`config.toml`'s `[data].raw_dir` points at an external data folder to avoid
+duplicating hundreds of MB, and `data/` is gitignored. See README.md for the
+expected CSV format.
+
+**Both US30 and DAX are now ingested.** `config.toml`'s `raw_dir` covers US30
+(DOW); DAX comes from the sibling `.../DAX-Data` folder via `run_dax_minutes.py`
+(the raw CSVs carry the vendor ticker `GER30`, relabelled to `DAX` on ingest —
+`run_bars.py` does the same thing when building bars straight from raw).
+
+RTH windows are **per-instrument**, defined in ET: US30 09:30–16:00 (NYSE cash),
+DAX 03:00–11:30 (Xetra cash = 09:00–17:30 CET). `config.toml`'s single
+`[session]` window is US30's and is used by `etl.parse.tag_sessions`; the
+per-instrument map lives in `run_bars.py`'s `RTH_WINDOWS` and is applied at
+ingest time by `run_dax_minutes.py`. **`tag_sessions` must not be used for DAX** —
+it would apply the NYSE window and mislabel the wrong 6.5 hours as RTH.
 
 ## Data flow (ETL)
 
@@ -173,25 +209,55 @@ missing). `run_market_profile.py` works around this itself for its own 12
 columns by `DROP COLUMN` + `ADD COLUMN` every run (SQLite ≥ 3.35 required) —
 that pattern is safe to reuse for any future post-ETL column-adding script.
 
-Current scale (US30 only, 2009-03-11 through 2026-07-01): 5.7M minute bars →
-4,461 sessions, 260 columns in `sessions`. `gyrations` has ~8.8M rows across
-all precomputed (scope, mode, threshold) combinations (`rth`+`eth`
-`close_to_close`, `rth` `extreme_to_extreme`, and — as of 2026-08-02 —
-`continuous` in both modes; `eth`/`extreme_to_extreme` is the one combination
-still not precomputed anywhere).
+Current scale: **9.73M minute bars** (US30 5,456,962 from 2009-03-11 to
+2026-07-01; DAX 4,268,532 from 2008-09-11 to 2026-07-10) → 4,461 sessions,
+260 columns in `sessions`. `gyrations` has ~8.8M rows across all precomputed
+(scope, mode, threshold) combinations (`rth`+`eth` `close_to_close`, `rth`
+`extreme_to_extreme`, and — as of 2026-08-02 — `continuous` in both modes;
+`eth`/`extreme_to_extreme` is the one combination still not precomputed
+anywhere).
+
+⚠️ **`sessions` and `gyrations` are US30-only.** The DAX ingest added 1-minute
+bars and higher-timeframe `bars`, but not the session-level or leg-level
+derived tables. Anything routed through `dashboard.get_instruments()`,
+`get_date_bounds()` or `query.gyr_waves.fetch_session_rows()` therefore
+silently excludes DAX — those read `sessions`. Pages that must support both
+instruments read `minutes`/`bars` directly instead (that is why
+`query/time_waves.py` and `query/gyr_stats.py` exist).
 
 ## Database — `data/db/lookup.sqlite`
 
-Five tables. `minutes` and `sessions` have Polars-DataFrame-derived schemas
-(any new registry column just works, no DDL to write); `gyrations`,
-`session_shapes`, `shape_swings` are hand-written fixed schemas.
+Ten tables. `minutes` and `sessions` have Polars-DataFrame-derived schemas
+(any new registry column just works, no DDL to write); everything else is a
+hand-written fixed schema.
 
-### `minutes` (8 columns, ~5.46M rows)
+| table | rows | built by |
+|---|---|---|
+| `minutes` | 9,725,494 | `run_etl.py` (US30), `run_dax_minutes.py` (DAX) |
+| `sessions` | 4,461 | `run_etl.py` (+ `run_shapes`, `run_market_profile`) |
+| `gyrations` | 8,811,697 | `run_etl.py`, `run_gyrations_continuous.py` |
+| `bars` | 4,301,276 | `run_bars.py` |
+| `range_state` | 654,348 | `run_range_state.py` |
+| `range_bars` | 367,147 | `run_range_bars.py` |
+| `session_hour_bars` | 56,508 | `run_hour_bars.py` |
+| `shape_swings` | 17,697 | `run_shapes.py` |
+| `session_shapes` | 13,383 | `run_shapes.py` |
+| `day_profiles` | 8,944 | `run_day_templates.py` |
+
+### `minutes` (8 columns, 9.73M rows — US30 + DAX)
 One row per (instrument, timestamp) raw bar. `instrument, ts, open, high,
 low, close, date, session`. `session` is `"RTH"` or `"ETH"` (everything that
-isn't RTH). `date` is the ET calendar date. Primary key `(instrument, ts)`.
+isn't RTH), tagged with **that instrument's own** RTH window. `date` is the ET
+calendar date. Primary key `(instrument, ts)`.
 
-### `sessions` (260 columns, 4,461 rows for US30)
+### `bars` (9 columns, 4.30M rows)
+Clock-aligned higher-timeframe OHLC, one row per (instrument, tf_min, bar
+start), for tf_min ∈ {5, 10, 15, 30, 60, 240}. Carries `n_min` (how many
+1-minute bars actually went into it) and `n_rth_min` (how many of those were
+inside RTH), so "complete bars only" and "RTH only" are WHERE clauses rather
+than post-filtering. Covers both instruments.
+
+### `sessions` (260 columns, 4,461 rows — US30 only)
 One row per (instrument, date) — the whole app's central table, entirely
 driven by `src/features/registry.py` (see "Feature registry" below) except
 for a handful of columns bolted on by post-ETL scripts (`shape_*`,
@@ -446,7 +512,7 @@ tuples, returns `Pivot`/`Leg` objects addressed by integer index.
 src/app/app.py`). Uses function-reference `st.Page` (not path-string) so
 every page module is imported once by plain top-level name — keeps
 `st.cache_resource`'s cache key (keyed on function `__module__`) from
-fragmenting into independently-cached DB connections per page. All 5 pages
+fragmenting into independently-cached DB connections per page. All 11 pages
 therefore share **one** cached SQLite connection.
 
 `dashboard.py` is both the Day Session page *and* the shared-helpers module
