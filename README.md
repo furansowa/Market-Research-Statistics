@@ -2,7 +2,7 @@
 
 A Streamlit research workbench for studying intraday market structure on index futures
 (US30/DOW and DAX). It ingests raw 1-minute bars, derives per-session statistics and
-"gyration" (swing/leg) decompositions, and exposes eleven analysis pages for filtering
+"gyration" (swing/leg) decompositions, and exposes twelve analysis pages for filtering
 history, classifying day shapes, and measuring how swings behave in price and in time.
 
 Built as a personal research tool — the emphasis is on **measurement honesty** rather than
@@ -25,6 +25,7 @@ detector geometry rather than market behaviour.
 | **Hourly Composite v1.0** | One session-hour, every day, chained gap-free — isolates what a given hour does |
 | **Gyrational Stats v1.0** | 123 retracement zones and Figure-2.31 continuation zones, normalised by 5-day volatility |
 | **Time Waves v1.0** | Merrill patterns over waves defined by **bar count** instead of point size |
+| **Pivots TimeMap 1.0** | Which candle of the session turns — pivot counts/rates per 5-min slot and per gyration size, with the leg-reach percentiles that follow each pivot |
 
 ## Requirements
 
@@ -100,7 +101,7 @@ page you don't need.
 .venv/Scripts/streamlit.exe run src/app/app.py
 ```
 
-`src/app/app.py` is the entry point and wires all eleven pages into one multipage app.
+`src/app/app.py` is the entry point and wires all twelve pages into one multipage app.
 Individual page modules can also be run standalone (`streamlit run src/app/dashboard.py`)
 for quicker iteration on a single page.
 

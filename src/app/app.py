@@ -26,6 +26,7 @@ import day_templates_page
 import hour_composite_page
 import gyr_stats_page
 import time_waves_page
+import pivots_timemap_page
 
 st.set_page_config(page_title="Market Statistics Research v2.0", layout="wide")
 
@@ -41,5 +42,6 @@ pg = st.navigation([
     st.Page(lambda: hour_composite_page.main(standalone=False), title="Hourly Composite v1.0", url_path="hourly-composite"),
     st.Page(lambda: gyr_stats_page.main(standalone=False), title="Gyrational Stats v1.0", url_path="gyrational-stats"),
     st.Page(lambda: time_waves_page.main(standalone=False), title="Time Waves v1.0", url_path="time-waves"),
+    st.Page(lambda: pivots_timemap_page.main(standalone=False), title="Pivots TimeMap 1.0", url_path="pivots-timemap"),
 ])
 pg.run()

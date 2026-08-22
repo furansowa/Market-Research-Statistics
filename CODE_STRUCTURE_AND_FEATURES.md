@@ -12,11 +12,12 @@ documents — read them for the "why" behind early decisions — but they are no
 kept in sync with what's actually built; this file is.
 
 > **PART 2 coverage status.** Part 1 (architecture, file tree, database,
-> shared modules) is current. Part 2 documents pages 1-5 in full; pages 6-11
+> shared modules) is current. Part 2 documents pages 1-5 in full; pages 6-12
 > (Gyrational Time, Gyrational Range, Day Templates, Hourly Composite,
-> Gyrational Stats, Time Waves) are **not yet written up here** — their module
-> docstrings are the reference for now and are unusually detailed, including
-> the known-limitation notes that matter for interpreting their output.
+> Gyrational Stats, Time Waves, Pivots TimeMap) are **not yet written up
+> here** — their module docstrings are the reference for now and are unusually
+> detailed, including the known-limitation notes that matter for interpreting
+> their output.
 
 Each page's feature list below is **fully self-contained** — a column or
 concept that's shared across pages (e.g. "BS/SB", "Gap", the gyration
@@ -102,6 +103,7 @@ Gyrations_app/
 │   │   ├── range_bars.py           # Renko-style range-bar construction
 │   │   ├── range_state.py          # multi-timeframe range state + causal quantile bucketing
 │   │   ├── time_patterns.py        # time-of-day pattern helpers (Gyrational Time page)
+│   │   ├── pivot_timemap.py        # pivots re-keyed by candle-of-session + slot stats (Pivots TimeMap)
 │   │   ├── market_profile.py       # POC / Value Area (time-at-price) algorithm
 │   │   ├── merrill.py              # Arthur Merrill M/W 4-leg pattern classification
 │   │   └── rainflow.py             # rainflow cycle counting — standalone research module, NOT wired
@@ -118,9 +120,10 @@ Gyrations_app/
 │   │   ├── range_state.py          # `range_state` queries (Gyrational Range)
 │   │   ├── day_templates.py        # `day_profiles` queries (Day Templates)
 │   │   ├── gyr_stats.py            # ETH bars + RTH session ranges (Gyrational Stats)
-│   │   └── time_waves.py           # minute-bar loading, instrument-agnostic (Time Waves)
+│   │   ├── time_waves.py           # minute-bar loading, instrument-agnostic (Time Waves)
+│   │   └── pivot_timemap.py        # minute-bar loading w/ date column + session open (Pivots TimeMap)
 │   └── app/
-│       ├── app.py                  # multipage entry point — wires all 11 pages together
+│       ├── app.py                  # multipage entry point — wires all 12 pages together
 │       ├── dashboard.py            # Day Session page + shared helpers used by every other page
 │       ├── legs_page.py            # Gyration Legs page
 │       ├── gyrations_v2_page.py    # Gyrations v2.0 page
@@ -131,7 +134,8 @@ Gyrations_app/
 │       ├── day_templates_page.py   # Day Templates v1.0 page
 │       ├── hour_composite_page.py  # Hourly Composite v1.0 page
 │       ├── gyr_stats_page.py       # Gyrational Stats v1.0 page
-│       └── time_waves_page.py      # Time Waves v1.0 page
+│       ├── time_waves_page.py      # Time Waves v1.0 page
+│       └── pivots_timemap_page.py  # Pivots TimeMap 1.0 page
 ├── tests/
 │   ├── conftest.py                 # session-scoped sqlite3 connection fixture to the built DB
 │   ├── test_sessions.py            # acceptance tests: invariants over the built `sessions` table
